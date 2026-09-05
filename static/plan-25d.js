@@ -7,7 +7,7 @@ class Plan25D {
     canvas.addEventListener('wheel', e => { e.preventDefault(); this.zoomBy(e.deltaY < 0 ? 1.1 : 1 / 1.1); }, {passive: false});
     canvas.addEventListener('pointerdown', e => {
       canvas.setPointerCapture(e.pointerId);
-      this.drag = {x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button === 2};
+      this.drag = {x: e.clientX, y: e.clientY, pan: this.panMode || this.spaceHeld || e.shiftKey || e.button === 2};
     });
     canvas.addEventListener('pointermove', e => {
       if (!this.drag) return;
@@ -66,7 +66,8 @@ class Plan25D {
           const leaf = (hinge, direction, size) => {
             // Retain the editor's hinge side and local negative-side opening.
             const angle = Math.PI / 3;
-            const end = {x: hinge.x + u.x*direction*size*Math.cos(angle) + u.y*size*Math.sin(angle), y: hinge.y + u.y*direction*size*Math.cos(angle) - u.x*size*Math.sin(angle)};
+            const side = d.openingSide === 1 ? -1 : 1;
+            const end = {x: hinge.x + u.x*direction*size*Math.cos(angle) + side*u.y*size*Math.sin(angle), y: hinge.y + u.y*direction*size*Math.cos(angle) - side*u.x*size*Math.sin(angle)};
             this.box(hinge, end, 3, 1, doorHeight-frame, [161, 178, 187]);
             const handle = {x: hinge.x+(end.x-hinge.x)*.83, y: hinge.y+(end.y-hinge.y)*.83};
             this.box(handle, {x:handle.x+u.x*5,y:handle.y+u.y*5}, 5, 48, 51, [70, 84, 91]);

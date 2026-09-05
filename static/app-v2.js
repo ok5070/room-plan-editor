@@ -11,6 +11,18 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 const clone = (value) => JSON.parse(JSON.stringify(value));
+const layerNames = {wall:'Стены', partition:'Перегородки', door:'Двери', window:'Окна', background:'Подложка', controller:'Оборудование'};
+const layers = Object.fromEntries(Object.keys(layerNames).map(k => [k,{visible:true,locked:k==='background'}]));
+function editable(layer) { return layers[layer].visible && !layers[layer].locked; }
+function selectedEditable() {
+  if (!state.selected) return false;
+  if (state.selected.kind !== 'wall') return editable(state.selected.kind);
+  const w = state.geometry.walls.find(w=>w.id===state.selected.id);
+  return w && editable(w.type) && !state.geometry.doors.some(d=>d.wallId===w.id&&!editable('door')) && !state.geometry.windows.some(d=>d.wallId===w.id&&!editable('window'));
+}
+function renderLayers() {
+  $('#architectural-layers').innerHTML=Object.entries(layerNames).map(([key,name])=>'<div class="layer-controls"><span>'+name+'</span><button data-visible="'+key+'" aria-label="Видимость: '+name+'">'+(layers[key].visible?'Виден':'Скрыт')+'</button><button data-lock="'+key+'" aria-label="Блокировка: '+name+'">'+(layers[key].locked?'🔒':'🔓')+'</button></div>').join('');
+}
 
 function showToast(message, isError = false) {
   const toast = $("#toast");
@@ -92,6 +104,7 @@ function drawGeometry() {
   if (!state.geometryLayer) return;
   state.geometryLayer.removeChildren();
   state.geometry.walls.forEach((wall) => {
+    if (!layers[wall.type].visible) return;
     const selected = state.selected?.kind === "wall" && state.selected.id === wall.id;
     const g = new PIXI.Graphics();
     g.moveTo(wall.x1, wall.y1).lineTo(wall.x2, wall.y2).stroke({ width: wall.thickness, color: selected ? 0xf4bd5c : wall.type === "partition" ? 0x169b91 : 0x243c63, alpha: 0.96 });
@@ -102,10 +115,12 @@ function drawGeometry() {
     state.geometryLayer.addChild(g);
   });
   state.geometry.doors.forEach((door) => {
+    if (!layers.door.visible) return;
     const selected = state.selected?.kind === "door" && state.selected.id === door.id;
     const holder = new PIXI.Container();
     holder.position.set(door.x, door.y);
     holder.rotation = door.rotation || 0;
+    holder.scale.y = door.openingSide === 1 ? -1 : 1;
     const g = new PIXI.Graphics();
     const half = door.width / 2;
     g.moveTo(-half, 0).lineTo(half, 0).stroke({ width: 18, color: 0xf4f5f3, alpha: 0.96 });
@@ -127,6 +142,7 @@ function drawGeometry() {
     state.geometryLayer.addChild(holder);
   });
   state.geometry.windows.forEach((windowItem) => {
+    if (!layers.window.visible) return;
     const selected = state.selected?.kind === "window" && state.selected.id === windowItem.id;
     const holder = new PIXI.Container();
     holder.position.set(windowItem.x, windowItem.y);
@@ -144,6 +160,8 @@ function drawGeometry() {
   });
   updateVisibleCount();
   updateEditorButtons();
+  if (state.backgroundSprite) state.backgroundSprite.visible=layers.background.visible;
+  state.markers.forEach(marker=>{marker.visible=layers.controller.visible;});
 }
 
 function createMarker(item) {
@@ -208,9 +226,15 @@ function nearestWall(point, tolerance = Infinity) {
 
 function nearestElement(point) {
   const tolerance = 22 / state.scale; let best = null;
-  state.geometry.doors.forEach((door) => { const distance = Math.hypot(point.x - door.x, point.y - door.y); if (distance <= tolerance && (!best || distance < best.distance)) best = { kind: "door", id: door.id, distance }; });
-  state.geometry.windows.forEach((windowItem) => { const distance = Math.hypot(point.x - windowItem.x, point.y - windowItem.y); if (distance <= tolerance && (!best || distance < best.distance)) best = { kind: "window", id: windowItem.id, distance }; });
-  state.geometry.walls.forEach((wall) => { const distance = projectToWall(point, wall).distance; if (distance <= tolerance && (!best || distance < best.distance)) best = { kind: "wall", id: wall.id, distance }; });
+  for (const [kind,items] of [['door',state.geometry.doors],['window',state.geometry.windows]]) {
+    if (!editable(kind)) continue;
+    items.forEach(item=>{const c=Math.cos(item.rotation||0),s=Math.sin(item.rotation||0),dx=point.x-item.x,dy=point.y-item.y;
+      const distance=Math.hypot(Math.max(0,Math.abs(dx*c+dy*s)-item.width/2),-dx*s+dy*c);
+      if(distance<=tolerance&&(!best||distance<best.distance)) best={kind,id:item.id,distance};
+    });
+  }
+  if (best) return best;
+  state.geometry.walls.forEach((wall) => { if(!editable(wall.type)) return; const distance = projectToWall(point, wall).distance; if (distance <= tolerance && (!best || distance < best.distance)) best = { kind: "wall", id: wall.id, distance }; });
   return best;
 }
 
@@ -243,7 +267,7 @@ function addWindow(point) {
 }
 
 function deleteSelected() {
-  if (!state.selected) return;
+  if (!selectedEditable()) return showToast('Слой или связанные проёмы заблокированы');
   beginMutation();
   if (state.selected.kind === "wall") {
     state.geometry.walls = state.geometry.walls.filter((item) => item.id !== state.selected.id);
@@ -261,6 +285,8 @@ function drawDraft(point) { clearDraft(); if (!state.draftStart) return; const g
 
 function handleEditorDown(event) {
   const point = worldPoint(event);
+  const layer = state.tool.startsWith('door') ? 'door' : state.tool;
+  if (layer !== 'select' && layers[layer] && !editable(layer)) return showToast('Сначала включите и разблокируйте слой');
   if (["wall", "partition"].includes(state.tool)) {
     if (!state.draftStart) { state.draftStart = point; drawDraft(point); setEditorHint("Укажите вторую точку"); }
     else { addWall(state.tool, state.draftStart, point); setTool(state.tool); }
@@ -271,7 +297,7 @@ function handleEditorDown(event) {
   if (state.tool === "door-double") return addDoor(point, "right", 2);
   if (state.tool === "window") return addWindow(point);
   state.selected = nearestElement(point);
-  if (state.selected) state.moving = { start: point, geometry: clone(state.geometry), started: false };
+  if (selectedEditable()) state.moving = { start: point, geometry: clone(state.geometry), started: false };
   drawGeometry(); showGeometryCard();
 }
 
@@ -287,7 +313,14 @@ function handleEditorMove(event) {
     state.geometry.windows.filter((windowItem) => windowItem.wallId === wall.id).forEach((windowItem) => { const originalWindow = state.moving.geometry.windows.find((item) => item.id === windowItem.id); windowItem.x = originalWindow.x + dx; windowItem.y = originalWindow.y + dy; });
   } else {
     const item = state.selected.kind === "door" ? state.geometry.doors.find((entry) => entry.id === state.selected.id) : state.geometry.windows.find((entry) => entry.id === state.selected.id);
-    const target = nearestWall(point);
+    const host = state.geometry.walls.find(w=>w.id===item.wallId);
+    const target = event.altKey ? nearestWall(point,45/state.scale) : host ? {wall:host,...projectToWall(point,host)} : null;
+    if (target) {
+      const length=Math.hypot(target.wall.x2-target.wall.x1,target.wall.y2-target.wall.y1);
+      const margin=Math.min(.5,item.width/2/(length||1));
+      const t=Math.max(margin,Math.min(1-margin,target.t));
+      target.x=target.wall.x1+t*(target.wall.x2-target.wall.x1); target.y=target.wall.y1+t*(target.wall.y2-target.wall.y1);
+    }
     if (target) Object.assign(item, { wallId: target.wall.id, x: target.x, y: target.y, rotation: target.rotation });
   }
   drawGeometry();
@@ -298,12 +331,12 @@ function bindCanvasNavigation() {
   canvas.addEventListener("wheel", (event) => { event.preventDefault(); zoomAt(event.deltaY < 0 ? 1.12 : 0.89, event.clientX, event.clientY); }, { passive: false });
   canvas.addEventListener("pointerdown", (event) => {
     canvas.setPointerCapture(event.pointerId);
-    if (state.editorEnabled) return handleEditorDown(event);
+    if (state.editorEnabled && state.tool!=='pan' && !state.spaceHeld && event.button!==1) return handleEditorDown(event);
     state.dragging = true; state.dragStart = { x: event.clientX, y: event.clientY }; state.worldStart = { x: state.world.x, y: state.world.y };
   });
   canvas.addEventListener("pointermove", (event) => {
     const point = worldPoint(event); $("#cursor-coordinates").textContent = `${point.x.toFixed(0)} / ${point.y.toFixed(0)}`;
-    if (state.editorEnabled) return handleEditorMove(event);
+    if (state.editorEnabled && !state.dragging) return handleEditorMove(event);
     if (state.dragging) state.world.position.set(state.worldStart.x + event.clientX - state.dragStart.x, state.worldStart.y + event.clientY - state.dragStart.y);
   });
   const stop = () => { state.dragging = false; state.moving = null; };
@@ -315,6 +348,7 @@ function setTool(tool) {
   state.tool = tool; state.draftStart = null; state.moving = null; clearDraft();
   document.querySelectorAll(".tool-button").forEach((button) => button.classList.toggle("is-active", button.dataset.tool === tool));
   $("#floor-plan-container").dataset.tool = tool;
+  if (tool==='pan') return setEditorHint('Зажмите левую кнопку и перемещайте весь план');
   setEditorHint({ select: "Выберите или перетащите элемент", wall: "Стена: укажите первую точку", partition: "Перегородка: укажите первую точку", "door-left": "Левая дверь: нажмите рядом со стеной", "door-right": "Правая дверь: нажмите рядом со стеной", "door-double": "Двойная дверь: нажмите рядом со стеной", window: "Окно: нажмите рядом со стеной" }[tool]);
 }
 
@@ -335,11 +369,11 @@ function showGeometryCard() {
   if (!item) return;
   const type = state.selected.kind === "wall" ? item.type === "partition" ? "Перегородка" : "Стена" : state.selected.kind === "door" ? item.leafCount === 2 ? "Двойная дверь" : "Одинарная дверь" : "Окно";
   const details = state.selected.kind === "wall" ? `<dt>Начало</dt><dd>${item.x1.toFixed(0)} / ${item.y1.toFixed(0)}</dd><dt>Конец</dt><dd>${item.x2.toFixed(0)} / ${item.y2.toFixed(0)}</dd>` : `<dt>Стена</dt><dd>${escapeHtml(item.wallId)}</dd><dt>Центр</dt><dd>${item.x.toFixed(0)} / ${item.y.toFixed(0)}</dd>`;
-  const doorActions = state.selected.kind === "door" ? `<div class="object-card__actions"><button type="button" data-door-action="flip">Открывание: ${item.swing === "left" ? "налево" : "направо"}</button><button type="button" data-door-action="toggle-leaves">${item.leafCount === 2 ? "Сделать одинарной" : "Сделать двойной"}</button></div>` : "";
+  const doorActions = state.selected.kind === "door" ? `<div class="object-card__actions"><button type="button" data-door-action="flip">Петли: ${item.swing === "left" ? "слева" : "справа"}</button><button type="button" data-door-action="side">Сменить сторону открытия (${item.openingSide === 1 ? 'Б' : 'А'})</button><button type="button" data-door-action="toggle-leaves">${item.leafCount === 2 ? "Сделать одинарной" : "Сделать двойной"}</button></div><p class="editor-help">А/Б — стороны стены. «Внутрь» определяется относительно выбранного помещения.</p>` : state.selected.kind === 'window' ? `<p class="editor-help">Ширина: ${item.width} ед. плана. Перетащите вдоль стены; Alt — перенос на другую стену.</p>` : "";
   $("#object-card").innerHTML = `<div class="object-card__content"><div class="object-card__head"><h3>${escapeHtml(item.id)}</h3><span class="status-badge">выбран</span></div><dl><dt>Тип</dt><dd>${type}</dd>${details}</dl>${doorActions}</div>`;
 }
 
-function updateEditorButtons() { $("#delete-element").disabled = !state.selected; $("#undo-edit").disabled = !state.history.length; $("#redo-edit").disabled = !state.future.length; }
+function updateEditorButtons() { $("#delete-element").disabled = !selectedEditable(); $("#undo-edit").disabled = !state.history.length; $("#redo-edit").disabled = !state.future.length; }
 function updateVisibleCount() { if (state.geometry) $("#visible-count").textContent = `${state.geometry.walls.length + state.geometry.doors.length + state.geometry.windows.length + state.markers.length} элементов`; }
 
 async function saveGeometry() {
@@ -361,6 +395,21 @@ function normalizeCoordinates(items, bounds) {
 }
 
 function bindInterface() {
+  renderLayers();
+  $('#architectural-layers').addEventListener('click',event=>{
+    const b=event.target.closest('button'); if(!b) return;
+    if(b.dataset.visible) layers[b.dataset.visible].visible=!layers[b.dataset.visible].visible;
+    if(b.dataset.lock) layers[b.dataset.lock].locked=!layers[b.dataset.lock].locked;
+    state.selected=null;state.moving=null;state.draftStart=null;clearDraft();renderLayers();drawGeometry();showGeometryCard();
+  });
+  for(const [id,locked] of [['lock-all',true],['unlock-all',false]]) $('#'+id).addEventListener('click',()=>{
+    Object.values(layers).forEach(l=>l.locked=locked);state.selected=null;state.moving=null;state.draftStart=null;clearDraft();renderLayers();drawGeometry();showGeometryCard();
+  });
+  $('#volume-navigation').addEventListener('change',e=>{if(state.volume) state.volume.panMode=e.target.value==='pan';});
+  window.addEventListener('keydown',e=>{if(e.code==='Space'&&!['INPUT','TEXTAREA','SELECT','BUTTON'].includes(e.target.tagName)){e.preventDefault();state.spaceHeld=true;if(state.volume)state.volume.spaceHeld=true;}});
+  const releaseSpace=()=>{state.spaceHeld=false;if(state.volume)state.volume.spaceHeld=false;};
+  window.addEventListener('keyup',e=>{if(e.code==='Space')releaseSpace();});
+  window.addEventListener('blur',()=>{releaseSpace();state.dragging=false;state.moving=null;});
   $('#view-2d').addEventListener('click', () => setViewMode('2d'));
   $('#view-25d').addEventListener('click', () => setViewMode('25d'));
   const changeCamera = () => state.volume?.setCamera(Number($('#view-tilt').value), Number($('#view-rotation').value));
@@ -378,11 +427,12 @@ function bindInterface() {
   $("#delete-element").addEventListener("click", deleteSelected); $("#undo-edit").addEventListener("click", undo); $("#redo-edit").addEventListener("click", redo);
   $("#object-card").addEventListener("click", (event) => {
     const action = event.target.closest("[data-door-action]")?.dataset.doorAction;
-    if (!action || state.selected?.kind !== "door") return;
+    if (!action || state.selected?.kind !== "door" || !selectedEditable()) return;
     const door = state.geometry.doors.find((item) => item.id === state.selected.id);
     if (!door) return;
     beginMutation();
     if (action === "flip") door.swing = door.swing === "left" ? "right" : "left";
+    if (action === "side") door.openingSide = door.openingSide === 1 ? -1 : 1;
     if (action === "toggle-leaves") { door.leafCount = door.leafCount === 2 ? 1 : 2; door.width = door.leafCount === 2 ? Math.max(88, door.width) : Math.min(48, door.width); }
     drawGeometry(); showGeometryCard();
   });
@@ -390,7 +440,7 @@ function bindInterface() {
   $("#background-opacity").addEventListener("input", (event) => { if (state.backgroundSprite) state.backgroundSprite.alpha = Number(event.target.value) / 100; });
   $("#cad-file").addEventListener("change", async (event) => { const [file] = event.target.files; if (!file) return; try { await uploadCad(file); } catch (error) { showToast(error.message, true); } event.target.value = ""; });
   window.addEventListener("keydown", (event) => {
-    if (state.viewMode === '25d' || !state.editorEnabled || ["INPUT", "TEXTAREA"].includes(event.target.tagName)) return;
+    if (state.viewMode === '25d' || !state.editorEnabled || ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
     if (["Delete", "Backspace"].includes(event.key)) { event.preventDefault(); deleteSelected(); }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") { event.preventDefault(); event.shiftKey ? redo() : undo(); }
     const shortcuts = { v: "select", w: "wall", p: "partition", l: "door-left", r: "door-right", d: "door-double", o: "window" }; if (shortcuts[event.key.toLowerCase()]) setTool(shortcuts[event.key.toLowerCase()]);
@@ -413,6 +463,7 @@ async function setViewMode(mode) {
         $('#zoom-label').textContent = `${Math.round(zoom*100)}%`;
       });
       state.volume.setModel(saved, state.project.floorPlan);
+      state.volume.panMode=$('#volume-navigation').value==='pan';
       $('#view-25d-info').textContent = `Сохранённый план: ${saved.walls.length} стен и перегородок, ${saved.doors.length} дверей, ${(saved.windows || []).length} окон. Основание — прямоугольная подставка; контур пола ещё не выделен.`;
     } catch(error) { showToast(error.message, true); return; }
     finally { state.viewLoading = false; }

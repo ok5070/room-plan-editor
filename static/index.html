@@ -67,16 +67,9 @@
               <p class="section-label">Слои плана</p>
               <span id="visible-count">8 объектов</span>
             </div>
-            <label class="layer-row">
-              <span class="legend-symbol legend-symbol--controller"></span>
-              <span>Контроллеры</span>
-              <input class="layer-toggle" type="checkbox" data-layer="controller" checked />
-            </label>
-            <label class="layer-row">
-              <span class="legend-symbol legend-symbol--door"></span>
-              <span>Двери</span>
-              <input class="layer-toggle" type="checkbox" data-layer="door" checked />
-            </label>
+            <div id="architectural-layers"></div>
+            <div class="editor-actions"><button id="lock-all">Блокировать все</button><button id="unlock-all">Разблокировать все</button></div>
+            <p class="editor-help">Слои редактирования 2D. Объёмный вид показывает всю сохранённую архитектуру.</p>
           </section>
 
           <section class="sidebar__section editor-section" id="editor-section">
@@ -86,6 +79,7 @@
             </div>
             <div class="editor-tools" role="toolbar" aria-label="Инструменты редактирования">
               <button type="button" class="tool-button is-active" data-tool="select" title="Выбор и перемещение (V)">Выбор</button>
+              <button type="button" class="tool-button" data-tool="pan">Перемещение плана</button>
               <button type="button" class="tool-button" data-tool="wall" title="Наружная или капитальная стена (W)">Стена</button>
               <button type="button" class="tool-button" data-tool="partition" title="Внутренняя перегородка (P)">Перегородка</button>
               <button type="button" class="tool-button" data-tool="door-left" title="Одинарная дверь, открывание налево (L)">Дверь ←</button>
@@ -112,11 +106,12 @@
               <input id="background-opacity" type="range" min="10" max="100" value="72" />
             </label>
             <button class="save-geometry" id="save-geometry" type="button" disabled>Сохранить геометрию</button>
-            <p class="editor-help">Стена/перегородка: укажите две точки. Дверь или окно: нажмите рядом со стеной. Выбор: перетащите элемент или нажмите Delete.</p>
+            <p class="editor-help">Стена/перегородка: две точки. Дверь или окно: нажмите рядом со стеной. Выбор: перетаскивание вдоль стены; Alt — перенос на другую стену; Delete — удаление. Пробел + перетаскивание — сдвиг всего плана. «Весь план» — центрирование.</p>
           </section>
 
           <section class="sidebar__section" id="view-25d-settings" hidden>
             <p class="section-label">Объёмный вид</p>
+            <label class="editor-option">Левая кнопка мыши <select id="volume-navigation"><option value="rotate">Вращение</option><option value="pan">Перемещение</option></select></label>
             <p class="editor-help">Наклон от вида сверху: 0° — сверху, 70° — низкий ракурс.</p>
             <div class="angle-presets">
               <button data-tilt="0">Сверху</button><button data-tilt="20">20°</button><button data-tilt="30">30°</button><button data-tilt="45">45°</button><button data-tilt="60">60°</button>

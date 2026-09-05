@@ -32,3 +32,14 @@ scene.setModel(saved,{width:2650,height:1850});
 assert.equal(JSON.stringify(saved),original);
 assert.equal(scene.openingCount,saved.doors.length+(saved.windows||[]).length);
 console.log('PASS: door/window cutouts, headers, source preservation, top view, project opening count');
+for (const leafCount of [1,2]) for (const swing of ['left','right']) {
+  const tips=[];
+  for (const openingSide of [-1,1]) {
+    volumes.length=0;
+    scene.setModel({...model,doors:[{...model.doors[0],leafCount,swing,openingSide}]},{width:400,height:300});
+    tips.push(volumes.filter(v=>v.color[0]===161).map(v=>v.b.y));
+  }
+  assert.equal(tips[0].length,leafCount);
+  tips[0].forEach((y,i)=>assert.equal(y,-tips[1][i],'Opening side mirrors each leaf'));
+}
+console.log('PASS: both opening sides for both hinges and double doors');

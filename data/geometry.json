@@ -427,6 +427,123 @@
       "x2": 1530.0,
       "y2": 1600.0,
       "thickness": 7.0
+    },
+    {
+      "id": "P-034",
+      "type": "partition",
+      "x1": 1980.0,
+      "y1": 710.0,
+      "x2": 2560.0,
+      "y2": 710.0,
+      "thickness": 7.0
+    },
+    {
+      "id": "P-035",
+      "type": "partition",
+      "x1": 1980.0,
+      "y1": 710.0,
+      "x2": 1980.0,
+      "y2": 1320.0,
+      "thickness": 7.0
+    },
+    {
+      "id": "P-036",
+      "type": "partition",
+      "x1": 1980.0,
+      "y1": 1310.0,
+      "x2": 2260.0,
+      "y2": 1310.0,
+      "thickness": 7.0
+    },
+    {
+      "id": "P-037",
+      "type": "partition",
+      "x1": 2260.0,
+      "y1": 1310.0,
+      "x2": 2260.0,
+      "y2": 710.0,
+      "thickness": 7.0
+    },
+    {
+      "id": "P-038",
+      "type": "partition",
+      "x1": 2260.0,
+      "y1": 810.0,
+      "x2": 1980.0,
+      "y2": 810.0,
+      "thickness": 7.0
+    },
+    {
+      "id": "P-039",
+      "type": "partition",
+      "x1": 1990.0,
+      "y1": 1070.0,
+      "x2": 2260.0,
+      "y2": 1070.0,
+      "thickness": 7.0
+    },
+    {
+      "id": "P-040",
+      "type": "partition",
+      "x1": 2140.0,
+      "y1": 1070.0,
+      "x2": 2140.0,
+      "y2": 1310.0,
+      "thickness": 7.0
+    },
+    {
+      "id": "P-041",
+      "type": "partition",
+      "x1": 2320.0,
+      "y1": 710.0,
+      "x2": 2320.0,
+      "y2": 1380.0,
+      "thickness": 7.0
+    },
+    {
+      "id": "P-042",
+      "type": "partition",
+      "x1": 2320.0,
+      "y1": 1200.0,
+      "x2": 2570.0,
+      "y2": 1200.0,
+      "thickness": 7.0
+    },
+    {
+      "id": "P-043",
+      "type": "partition",
+      "x1": 2140.0,
+      "y1": 1200.0,
+      "x2": 2260.0,
+      "y2": 1200.0,
+      "thickness": 7.0
+    },
+    {
+      "id": "P-044",
+      "type": "partition",
+      "x1": 1450.0,
+      "y1": 360.0,
+      "x2": 1580.0,
+      "y2": 490.0,
+      "thickness": 7.0
+    },
+    {
+      "id": "P-045",
+      "type": "partition",
+      "x1": 1230.0,
+      "y1": 580.0,
+      "x2": 1360.0,
+      "y2": 710.0,
+      "thickness": 7.0
+    },
+    {
+      "id": "P-046",
+      "type": "partition",
+      "x1": 2360.0,
+      "y1": 70.0,
+      "x2": 2360.0,
+      "y2": 510.0,
+      "thickness": 7.0
     }
   ],
   "doors": [
@@ -704,6 +821,160 @@
       "swing": "left",
       "leafCount": 1,
       "accessPointId": null
+    },
+    {
+      "id": "D-026",
+      "wallId": "P-037",
+      "x": 2260.0,
+      "y": 930.0,
+      "width": 48.0,
+      "rotation": -1.570796,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-027",
+      "wallId": "P-035",
+      "x": 1980.0,
+      "y": 900.0,
+      "width": 48.0,
+      "rotation": 1.570796,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-028",
+      "wallId": "P-035",
+      "x": 1980.0,
+      "y": 750.0,
+      "width": 48.0,
+      "rotation": 1.570796,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-029",
+      "wallId": "P-026",
+      "x": 2490.0,
+      "y": 1380.0,
+      "width": 48.0,
+      "rotation": 0.0,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-030",
+      "wallId": "P-041",
+      "x": 2320.0,
+      "y": 1330.0,
+      "width": 48.0,
+      "rotation": 1.570796,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-031",
+      "wallId": "P-026",
+      "x": 1920.0,
+      "y": 1380.0,
+      "width": 48.0,
+      "rotation": 0.0,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-032",
+      "wallId": "P-028",
+      "x": 2160.0,
+      "y": 1600.0,
+      "width": 48.0,
+      "rotation": 1.570796,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-033",
+      "wallId": "P-042",
+      "x": 2440.0,
+      "y": 1200.0,
+      "width": 48.0,
+      "rotation": 0.0,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-034",
+      "wallId": "P-041",
+      "x": 2320.0,
+      "y": 770.0,
+      "width": 48.0,
+      "rotation": 1.570796,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-035",
+      "wallId": "P-037",
+      "x": 2260.0,
+      "y": 1130.0,
+      "width": 48.0,
+      "rotation": -1.570796,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-036",
+      "wallId": "P-037",
+      "x": 2260.0,
+      "y": 1260.0,
+      "width": 48.0,
+      "rotation": -1.570796,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-037",
+      "wallId": "P-036",
+      "x": 2020.0,
+      "y": 1310.0,
+      "width": 48.0,
+      "rotation": 0.0,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-038",
+      "wallId": "P-021",
+      "x": 1890.0,
+      "y": 1050.0,
+      "width": 48.0,
+      "rotation": -1.570796,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
+    },
+    {
+      "id": "D-039",
+      "wallId": "P-021",
+      "x": 1890.0,
+      "y": 1160.0,
+      "width": 48.0,
+      "rotation": -1.570796,
+      "swing": "left",
+      "leafCount": 1,
+      "accessPointId": null
     }
   ],
   "windows": [
@@ -906,6 +1177,14 @@
       "y": 1721.331,
       "width": 72.0,
       "rotation": 3.13756
+    },
+    {
+      "id": "WIN-026",
+      "wallId": "W-001",
+      "x": 1178.313,
+      "y": 628.303,
+      "width": 72.0,
+      "rotation": -0.782377
     }
   ]
 }

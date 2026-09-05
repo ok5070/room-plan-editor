@@ -113,6 +113,7 @@ def validate_geometry(payload: dict[str, Any]) -> dict[str, Any]:
             "width": round(max(12.0, min(width, 300.0)), 3),
             "rotation": round(rotation, 6),
             "swing": "right" if door.get("swing") == "right" else "left",
+            "openingSide": 1 if door.get("openingSide") == 1 else -1,
             "leafCount": 2 if door.get("leafCount") == 2 else 1,
             "accessPointId": str(access_point_id).strip() if access_point_id not in (None, "") else None,
         })
