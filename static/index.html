@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#09141a" />
+    <meta name="description" content="Интерактивный редактор архитектурной геометрии" />
+    <title>Редактор плана помещения</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&amp;family=Unbounded:wght@500;600&amp;display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://pixijs.download/release/pixi.min.js" defer></script>
+    <script src="/static/plan-25d.js" defer></script>
+    <script src="/static/app-v2.js" defer></script>
+  </head>
+  <body>
+    <section class="cover" id="cover" aria-labelledby="cover-title">
+      <div class="cover__grid" aria-hidden="true"></div>
+      <div class="cover__topline">
+        <span class="brand-mark">РП</span>
+        <span>Рабочая демонстрация</span>
+        <span class="cover__index">01 / 01</span>
+      </div>
+      <div class="cover__content">
+        <p class="eyebrow">Интерактивная архитектурная геометрия</p>
+        <h1 id="cover-title">РЕДАКТОР <span>ПЛАНА ПОМЕЩЕНИЯ</span></h1>
+        <div class="cover__meta">
+          <p id="cover-object">Производственное помещение</p>
+          <p id="cover-address">г. Москва, ул. Рябиновая, д. 1</p>
+        </div>
+        <button class="primary-button" id="enter-plan" type="button">
+          <span>Перейти к интерактивному плану</span>
+          <span aria-hidden="true">↗</span>
+        </button>
+      </div>
+      <div class="cover__footer">
+        <span>Москва · 2026</span>
+        <span>Зум · Навигация · Карточки объектов</span>
+      </div>
+    </section>
+
+    <main class="dashboard" id="dashboard" aria-hidden="true">
+      <header class="topbar">
+        <button class="brand-button" id="back-to-cover" type="button" aria-label="Вернуться на титульный экран">
+          <span class="brand-mark">РП</span>
+          <span class="brand-button__text"><b>РЕДАКТОР ПЛАНА ПОМЕЩЕНИЯ</b><small>Стены · двери · окна</small></span>
+        </button>
+        <div class="topbar__status"><span class="pulse"></span><span>API подключено</span></div>
+        <button class="editor-toggle" id="editor-toggle" type="button" aria-pressed="false">Редактор плана</button>
+        <label class="upload-button" for="cad-file">
+          <span>Загрузить DXF / DWG</span>
+          <input id="cad-file" type="file" accept=".dxf,.dwg" />
+        </label>
+      </header>
+
+      <div class="workspace">
+        <aside class="sidebar">
+          <section class="sidebar__section project-summary">
+            <p class="section-label">Объект</p>
+            <h2 id="project-object">Производственное помещение</h2>
+            <p id="project-address">г. Москва, ул. Рябиновая, д. 1</p>
+          </section>
+
+          <section class="sidebar__section">
+            <div class="section-heading">
+              <p class="section-label">Слои плана</p>
+              <span id="visible-count">8 объектов</span>
+            </div>
+            <label class="layer-row">
+              <span class="legend-symbol legend-symbol--controller"></span>
+              <span>Контроллеры</span>
+              <input class="layer-toggle" type="checkbox" data-layer="controller" checked />
+            </label>
+            <label class="layer-row">
+              <span class="legend-symbol legend-symbol--door"></span>
+              <span>Двери</span>
+              <input class="layer-toggle" type="checkbox" data-layer="door" checked />
+            </label>
+          </section>
+
+          <section class="sidebar__section editor-section" id="editor-section">
+            <div class="section-heading">
+              <p class="section-label">Корректировка плана</p>
+              <span id="edit-status">просмотр</span>
+            </div>
+            <div class="editor-tools" role="toolbar" aria-label="Инструменты редактирования">
+              <button type="button" class="tool-button is-active" data-tool="select" title="Выбор и перемещение (V)">Выбор</button>
+              <button type="button" class="tool-button" data-tool="wall" title="Наружная или капитальная стена (W)">Стена</button>
+              <button type="button" class="tool-button" data-tool="partition" title="Внутренняя перегородка (P)">Перегородка</button>
+              <button type="button" class="tool-button" data-tool="door-left" title="Одинарная дверь, открывание налево (L)">Дверь ←</button>
+              <button type="button" class="tool-button" data-tool="door-right" title="Одинарная дверь, открывание направо (R)">Дверь →</button>
+              <button type="button" class="tool-button" data-tool="door-double" title="Двойная распашная дверь (D)">Двойная дверь</button>
+              <button type="button" class="tool-button" data-tool="window" title="Окно с привязкой к стене (O)">Окно</button>
+            </div>
+            <div class="geometry-legend" aria-label="Цвета архитектурных элементов">
+              <span><i class="geometry-legend__line geometry-legend__line--wall"></i>Стена</span>
+              <span><i class="geometry-legend__line geometry-legend__line--partition"></i>Перегородка</span>
+              <span><i class="geometry-legend__line geometry-legend__line--window"></i>Окно</span>
+            </div>
+            <div class="editor-actions">
+              <button type="button" id="delete-element" disabled>Удалить</button>
+              <button type="button" id="undo-edit" disabled>Отменить</button>
+              <button type="button" id="redo-edit" disabled>Повторить</button>
+            </div>
+            <label class="editor-option">
+              <span>Привязка к сетке 10 px</span>
+              <input id="snap-toggle" type="checkbox" checked />
+            </label>
+            <label class="editor-option editor-option--range">
+              <span>Подложка</span>
+              <input id="background-opacity" type="range" min="10" max="100" value="72" />
+            </label>
+            <button class="save-geometry" id="save-geometry" type="button" disabled>Сохранить геометрию</button>
+            <p class="editor-help">Стена/перегородка: укажите две точки. Дверь или окно: нажмите рядом со стеной. Выбор: перетащите элемент или нажмите Delete.</p>
+          </section>
+
+          <section class="sidebar__section" id="view-25d-settings" hidden>
+            <p class="section-label">Объёмный вид</p>
+            <p class="editor-help">Наклон от вида сверху: 0° — сверху, 70° — низкий ракурс.</p>
+            <div class="angle-presets">
+              <button data-tilt="0">Сверху</button><button data-tilt="20">20°</button><button data-tilt="30">30°</button><button data-tilt="45">45°</button><button data-tilt="60">60°</button>
+            </div>
+            <label class="editor-option">Наклон <output id="tilt-value">45°</output></label>
+            <input class="view-range" id="view-tilt" aria-label="Наклон камеры" type="range" min="0" max="70" step="1" value="45">
+            <div class="angle-presets"><button id="tilt-minus">−5°</button><button id="tilt-plus">+5°</button></div>
+            <label class="editor-option">Поворот <output id="rotation-value">0°</output></label>
+            <input class="view-range" id="view-rotation" aria-label="Поворот плана" type="range" min="0" max="360" value="0">
+            <label class="editor-option"><span>Показывать подложку PDF</span><input type="checkbox" id="view-source"></label>
+            <p class="editor-help">Мышь — вращение; Shift + перетаскивание — сдвиг; колесо — масштаб. Двойной щелчок — весь план.</p>
+            <p class="editor-help" id="view-25d-info"></p>
+            <p class="editor-help">Высоты условные. Иллюстративная визуализация. Не для монтажа.</p>
+          </section>
+
+          <section class="sidebar__section sidebar__section--hint">
+            <p class="section-label">Навигация</p>
+            <p>Колесико — масштаб. Зажмите и перетаскивайте план. Нажмите на маркер, чтобы открыть карточку.</p>
+          </section>
+
+          <section class="object-card" id="object-card" aria-live="polite">
+            <div class="object-card__empty">
+              <span class="crosshair" aria-hidden="true"></span>
+              <p>Выберите объект на плане</p>
+            </div>
+          </section>
+        </aside>
+
+        <section class="plan-panel" aria-label="Интерактивный план этажа">
+          <div class="plan-panel__head">
+            <div><p class="section-label">План 01</p><h2>Первый этаж</h2></div>
+            <div class="view-switch" aria-label="Режим плана"><button id="view-2d" aria-pressed="true">План 2D</button><button id="view-25d" aria-pressed="false">Объём 2.5D</button></div>
+            <div class="plan-panel__meta"><span id="source-label">Демонстрационная схема</span><span id="zoom-label">100%</span></div>
+          </div>
+          <div id="floor-plan-container">
+            <canvas id="plan-25d" hidden aria-label="Объёмный вид сохранённого плана"></canvas>
+            <div class="loading" id="loading"><span></span><p>Подготавливаем план…</p></div>
+            <div class="editor-hint" id="editor-hint" aria-live="polite">Режим просмотра</div>
+            <div class="canvas-controls" aria-label="Управление масштабом">
+              <button type="button" id="zoom-in" aria-label="Приблизить">+</button>
+              <button type="button" id="zoom-out" aria-label="Отдалить">−</button>
+              <button type="button" id="fit-plan">Весь план</button>
+            </div>
+            <div class="scale-ruler"><span></span><small>демо-масштаб</small></div>
+          </div>
+          <div class="plan-panel__foot">
+            <span id="revision">Демонстрационная схема · версия 0.1</span>
+            <span>Координаты: <b id="cursor-coordinates">— / —</b></span>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

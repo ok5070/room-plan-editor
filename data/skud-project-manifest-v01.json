@@ -1,0 +1,42 @@
+{
+  "project": "СБСТ-2026-03-Р-СКУД",
+  "source_pdf": "/Users/olegklimov/Downloads/SBST-2026-03-R-SKUD (1).pdf",
+  "pdf_page_index": 4,
+  "printed_sheet": 4,
+  "sheet_title": "План прокладки кабеля и расстановки оборудования",
+  "coordinate_note": "PyMuPDF page-search rectangles; preserve source page coordinate system and rotation",
+  "controllers": [
+    {"id": "AR.1", "label_rect": [661.0, 908.6, 670.3, 923.6], "access_points": ["ТД.1.1", "ТД.1.2", "ТД.1.3"]},
+    {"id": "AR.2", "label_rect": [558.7, 914.5, 568.1, 930.8], "access_points": ["ТД.2.1", "ТД.2.2", "ТД.2.3", "ТД.2.4"]},
+    {"id": "AR.3", "label_rect": [340.2, 632.6, 349.5, 648.9], "access_points": ["ТД.3.1", "ТД.3.2", "ТД.3.3", "ТД.3.4"]},
+    {"id": "AR.4", "label_rect": [340.2, 608.7, 349.5, 625.5], "access_points": ["ТД.4.1", "ТД.4.2", "ТД.4.3", "ТД.4.4"]},
+    {"id": "AR.5", "label_rect": [504.7, 619.0, 514.1, 635.2], "access_points": ["ТД.5.1", "ТД.5.2", "ТД.5.3"]}
+  ],
+  "access_points": [
+    {"id": "ТД.1.1", "label_rect": [688.3, 897.4, 697.7, 917.1], "door_id": "pending"},
+    {"id": "ТД.1.2", "label_rect": [655.8, 790.3, 665.1, 811.4], "door_id": "pending"},
+    {"id": "ТД.1.3", "label_rect": [684.2, 804.5, 693.5, 825.6], "door_id": "pending"},
+    {"id": "ТД.2.1", "label_rect": [522.7, 900.3, 532.1, 921.4], "door_id": "pending"},
+    {"id": "ТД.2.2", "label_rect": [562.5, 1010.1, 571.8, 1032.4], "door_id": "pending"},
+    {"id": "ТД.2.3", "label_rect": [575.7, 834.6, 585.0, 856.9], "door_id": "pending"},
+    {"id": "ТД.2.4", "label_rect": [468.0, 842.9, 477.3, 865.8], "door_id": "pending"},
+    {"id": "ТД.3.1", "label_rect": [326.9, 656.6, 336.2, 677.7], "door_id": "pending"},
+    {"id": "ТД.3.2", "label_rect": [272.7, 657.3, 282.0, 679.6], "door_id": "pending"},
+    {"id": "ТД.3.3", "label_rect": [270.2, 698.9, 279.5, 721.0], "door_id": "pending"},
+    {"id": "ТД.3.4", "label_rect": [292.5, 740.6, 301.8, 763.5], "door_id": "pending"},
+    {"id": "ТД.4.1", "label_rect": [385.8, 588.5, 395.1, 610.2], "door_id": "pending"},
+    {"id": "ТД.4.2", "label_rect": [326.2, 538.5, 335.5, 561.4], "door_id": "pending"},
+    {"id": "ТД.4.3", "label_rect": [325.5, 406.4, 334.8, 429.3], "door_id": "pending"},
+    {"id": "ТД.4.4", "label_rect": [323.5, 994.8, 332.8, 1018.3], "door_id": "pending"},
+    {"id": "ТД.5.1", "label_rect": [457.6, 593.9, 466.9, 614.8], "door_id": "pending"},
+    {"id": "ТД.5.2", "label_rect": [548.5, 610.3, 557.8, 632.4], "door_id": "pending"},
+    {"id": "ТД.5.3", "label_rect": [555.7, 646.9, 565.0, 669.1], "door_id": "pending"}
+  ],
+  "doors": [],
+  "expected_counts": {"controllers": 5, "access_points": 18},
+  "door_gate": {
+    "status": "pending-vector-trace",
+    "lift_doors_controlled": false,
+    "equipment_overlay_allowed": false
+  }
+}

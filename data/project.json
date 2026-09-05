@@ -1,0 +1,38 @@
+{
+  "project": {
+    "customer": "ООО «СИБЕСТ»",
+    "object": "Производственное помещение",
+    "address": "г. Москва, ул. Рябиновая, д. 1",
+    "system": "Система контроля и управления доступом",
+    "revision": "Лист 4 проекта · режим ручной корректировки"
+  },
+  "visualizationRules": {
+    "geometrySource": "Лист 4 проекта СБСТ-2026-03-Р-СКУД",
+    "controllerPlacement": {
+      "default": "Настенный монтаж в проектной позиции",
+      "fallback": "При отсутствии отдельного места — над обслуживаемой дверью",
+      "forbidden": ["на полу", "на дверном полотне", "на двери лифта"]
+    },
+    "powerSupply": {
+      "required": true,
+      "placement": "Рядом с контроллером или в общем настенном узле",
+      "components": ["резервированный источник питания", "аккумуляторная батарея"],
+      "showPowerCable": true
+    },
+    "scale": {
+      "doorHeightMm": 2050,
+      "controllerHeightMm": "300–400",
+      "readerHeightMm": "100–150",
+      "exitButtonSizeMm": "80–100",
+      "junctionBoxSizeMm": "100–150",
+      "cableDiameterMm": "6–12"
+    }
+  },
+  "floorPlan": {
+    "width": 2650,
+    "height": 1850,
+    "backgroundImage": "/static/project-plan.png",
+    "rooms": []
+  },
+  "equipment": []
+}
