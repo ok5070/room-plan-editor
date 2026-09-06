@@ -43,3 +43,16 @@ for (const leafCount of [1,2]) for (const swing of ['left','right']) {
   tips[0].forEach((y,i)=>assert.equal(y,-tips[1][i],'Opening side mirrors each leaf'));
 }
 console.log('PASS: both opening sides for both hinges and double doors');
+const equipment=[
+  {id:'EQ1',type:'reader',code:'YK1.1',x:80,y:0,rotation:0,mount:'wall',mountingHeight:1200},
+  {id:'EQ2',type:'power_supply',code:'R1',x:160,y:0,rotation:0,mount:'ceiling',mountingHeight:2200},
+  {id:'EQ3',type:'controller',code:'AR.1',x:220,y:0,rotation:0,mount:'ceiling',mountingHeight:2800,formFactor:'din_rail'},
+];
+const equipmentBefore=JSON.stringify(equipment);volumes.length=0;
+scene.setModel(model,{width:400,height:300},equipment);
+assert.equal(scene.equipmentCount,3);
+assert.equal(scene.equipmentLabels.length,3);
+assert.equal(JSON.stringify(equipment),equipmentBefore,'2.5D equipment rendering must not mutate project data');
+assert.ok(volumes.some(v=>v.color[0]===22),'Reader has its own small volume');
+assert.ok(volumes.some(v=>v.color[0]===215&&v.high===scene.height),'Ceiling mount includes a short suspension');
+console.log('PASS: wall and ceiling equipment volumes, labels and source preservation');

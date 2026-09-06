@@ -11,7 +11,10 @@
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&amp;family=Unbounded:wght@500;600&amp;display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="https://pixijs.download/release/pixi.min.js" defer></script>
+    <script src="/static/door-mount.js" defer></script>
+    <script src="/static/door-template.js" defer></script>
     <script src="/static/plan-25d.js" defer></script>
+    <script src="/static/door-editor.js" defer></script>
     <script src="/static/app-v2.js" defer></script>
   </head>
   <body>
@@ -56,6 +59,19 @@
 
       <div class="workspace">
         <aside class="sidebar">
+          <section class="sidebar__section project-storage">
+            <p class="section-label">Мои проекты</p>
+            <label for="project-list">Сохранённые проекты</label>
+            <select id="project-list"></select>
+            <button id="open-project" type="button">Открыть проект</button>
+            <label for="new-project-name">Новый проект</label>
+            <input id="new-project-name" maxlength="120" placeholder="Название объекта">
+            <button id="create-project" type="button">Создать проект</button>
+            <label for="project-source-file">Добавить исходный файл (до 25 МБ)</label>
+            <input id="project-source-file" type="file" accept=".pdf,.dwg,.dxf,.png,.jpg,.jpeg">
+            <ul id="project-files"></ul>
+            <p class="editor-help">Файлы хранятся локально внутри проекта. Добавление исходника не заменяет геометрию. Для проверки CAD используйте «Загрузить DXF / DWG».</p>
+          </section>
           <section class="sidebar__section project-summary">
             <p class="section-label">Объект</p>
             <h2 id="project-object">Производственное помещение</h2>
@@ -102,11 +118,33 @@
               <input id="snap-toggle" type="checkbox" checked />
             </label>
             <label class="editor-option editor-option--range">
-              <span>Подложка</span>
+              <span>Прозрачность подложки</span>
               <input id="background-opacity" type="range" min="10" max="100" value="72" />
             </label>
             <button class="save-geometry" id="save-geometry" type="button" disabled>Сохранить геометрию</button>
             <p class="editor-help">Стена/перегородка: две точки. Дверь или окно: нажмите рядом со стеной. Выбор: перетаскивание вдоль стены; Alt — перенос на другую стену; Delete — удаление. Пробел + перетаскивание — сдвиг всего плана. «Весь план» — центрирование.</p>
+          </section>
+
+          <section class="sidebar__section system-block" id="skud-equipment-section">
+            <div class="section-heading"><p class="section-label">СКУД и домофония</p><span id="equipment-status">0 размещено</span></div>
+            <p class="editor-help">Выберите прибор, затем укажите место на плане. Дверные устройства устанавливаются рядом с существующей дверью.</p>
+            <div class="equipment-palette" role="toolbar" aria-label="Оборудование СКУД и домофонии">
+              <button class="equipment-tool" data-equipment-type="access_point"><b>ТД</b><span>Точка доступа</span></button>
+              <button class="equipment-tool" data-equipment-type="controller"><b>AR</b><span>Контроллер</span></button>
+              <button class="equipment-tool" data-equipment-type="reader"><b>YK</b><span>Считыватель</span></button>
+              <button class="equipment-tool" data-equipment-type="exit_button"><b>BGV</b><span>Кнопка выхода</span></button>
+              <button class="equipment-tool equipment-tool--alarm" data-equipment-type="emergency_release"><b>BGM</b><span>Аварийный выход</span></button>
+              <button class="equipment-tool" data-equipment-type="lock"><b>UG</b><span>Замок</span></button>
+              <button class="equipment-tool" data-equipment-type="door_contact"><b>BGB</b><span>Магн. контакт</span></button>
+              <button class="equipment-tool" data-equipment-type="door_closer"><b>4</b><span>Доводчик</span></button>
+              <button class="equipment-tool equipment-tool--power" data-equipment-type="power_supply"><b>R</b><span>Источник питания</span></button>
+              <button class="equipment-tool equipment-tool--power" data-equipment-type="battery"><b>АК</b><span>Аккумулятор</span></button>
+              <button class="equipment-tool" data-equipment-type="junction_box"><b>КС</b><span>Соед. коробка</span></button>
+              <button class="equipment-tool equipment-tool--intercom" data-equipment-type="intercom_panel"><b>ДП</b><span>Панель домофона</span></button>
+              <button class="equipment-tool equipment-tool--intercom" data-equipment-type="intercom_monitor"><b>ВМ</b><span>Монитор домофона</span></button>
+            </div>
+            <button class="save-geometry" id="save-equipment" type="button" disabled>Сохранить оборудование</button>
+            <p class="editor-help">Кабельные трассы и материалы добавим следующим самостоятельным инструментом.</p>
           </section>
 
           <section class="sidebar__section" id="view-25d-settings" hidden>
@@ -142,7 +180,7 @@
 
         <section class="plan-panel" aria-label="Интерактивный план этажа">
           <div class="plan-panel__head">
-            <div><p class="section-label">План 01</p><h2>Первый этаж</h2></div>
+            <div><p class="section-label">План 01</p><h2 id="floor-plan-title">План этажа</h2></div>
             <div class="view-switch" aria-label="Режим плана"><button id="view-2d" aria-pressed="true">План 2D</button><button id="view-25d" aria-pressed="false">Объём 2.5D</button></div>
             <div class="plan-panel__meta"><span id="source-label">Демонстрационная схема</span><span id="zoom-label">100%</span></div>
           </div>
