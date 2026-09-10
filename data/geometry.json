@@ -544,6 +544,15 @@
       "x2": 2360.0,
       "y2": 510.0,
       "thickness": 7.0
+    },
+    {
+      "id": "P-047",
+      "type": "partition",
+      "x1": 1590.0,
+      "y1": 1380.0,
+      "x2": 1590.0,
+      "y2": 1730.0,
+      "thickness": 7.0
     }
   ],
   "doors": [
@@ -555,6 +564,7 @@
       "width": 48.0,
       "rotation": 0.0,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -566,6 +576,7 @@
       "width": 48.0,
       "rotation": -1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -577,6 +588,7 @@
       "width": 48.0,
       "rotation": 0.0,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -588,6 +600,7 @@
       "width": 48.0,
       "rotation": -1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -599,6 +612,7 @@
       "width": 48.0,
       "rotation": 0.0,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -610,6 +624,7 @@
       "width": 48.0,
       "rotation": -1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -621,6 +636,7 @@
       "width": 48.0,
       "rotation": -0.785398,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -632,6 +648,7 @@
       "width": 48.0,
       "rotation": 1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -643,6 +660,7 @@
       "width": 48.0,
       "rotation": 1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -654,6 +672,7 @@
       "width": 88.0,
       "rotation": 0.0,
       "swing": "right",
+      "openingSide": -1,
       "leafCount": 2,
       "accessPointId": null
     },
@@ -665,6 +684,7 @@
       "width": 88.0,
       "rotation": 0.0,
       "swing": "right",
+      "openingSide": -1,
       "leafCount": 2,
       "accessPointId": null
     },
@@ -676,6 +696,7 @@
       "width": 48.0,
       "rotation": 3.141593,
       "swing": "right",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -687,6 +708,7 @@
       "width": 48.0,
       "rotation": -1.570796,
       "swing": "right",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -698,6 +720,7 @@
       "width": 48.0,
       "rotation": -1.570796,
       "swing": "right",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -709,6 +732,7 @@
       "width": 48.0,
       "rotation": 2.336589,
       "swing": "right",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -720,6 +744,7 @@
       "width": 48.0,
       "rotation": -0.785398,
       "swing": "right",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -731,6 +756,7 @@
       "width": 48.0,
       "rotation": 1.570796,
       "swing": "right",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -742,6 +768,7 @@
       "width": 48.0,
       "rotation": 0.0,
       "swing": "right",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -753,6 +780,7 @@
       "width": 48.0,
       "rotation": 0.0,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -764,6 +792,7 @@
       "width": 48.0,
       "rotation": -1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -775,17 +804,19 @@
       "width": 48.0,
       "rotation": -1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
     {
       "id": "D-022",
       "wallId": "P-030",
-      "x": 1570.0,
+      "x": 1560.0,
       "y": 1600.0,
       "width": 48.0,
       "rotation": 0.0,
       "swing": "right",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -797,6 +828,7 @@
       "width": 48.0,
       "rotation": 0.0,
       "swing": "right",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -808,6 +840,7 @@
       "width": 48.0,
       "rotation": 0.0,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -819,6 +852,7 @@
       "width": 48.0,
       "rotation": 0.0,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -830,6 +864,7 @@
       "width": 48.0,
       "rotation": -1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -841,6 +876,7 @@
       "width": 48.0,
       "rotation": 1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -852,6 +888,7 @@
       "width": 48.0,
       "rotation": 1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -863,6 +900,7 @@
       "width": 48.0,
       "rotation": 0.0,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -874,6 +912,7 @@
       "width": 48.0,
       "rotation": 1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -885,6 +924,7 @@
       "width": 48.0,
       "rotation": 0.0,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -896,6 +936,7 @@
       "width": 48.0,
       "rotation": 1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -907,6 +948,7 @@
       "width": 48.0,
       "rotation": 0.0,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -918,6 +960,7 @@
       "width": 48.0,
       "rotation": 1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -929,6 +972,7 @@
       "width": 48.0,
       "rotation": -1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -940,6 +984,7 @@
       "width": 48.0,
       "rotation": -1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -951,6 +996,7 @@
       "width": 48.0,
       "rotation": 0.0,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -962,6 +1008,7 @@
       "width": 48.0,
       "rotation": -1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     },
@@ -973,6 +1020,7 @@
       "width": 48.0,
       "rotation": -1.570796,
       "swing": "left",
+      "openingSide": -1,
       "leafCount": 1,
       "accessPointId": null
     }

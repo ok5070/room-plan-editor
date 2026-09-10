@@ -16,12 +16,14 @@ function openDoorEditor(doorId) {
   const door=state.geometry.doors.find(d=>d.id===doorId);
   if(!door)return;
   if(!editable('controller'))return showToast('Разблокируйте слой оборудования',true);
+  const accessPoint=accessPointForDoor(door);
+  if(!accessPoint)return showToast('Сначала назначьте двери точку прохода, например ТД.1.1',true);
   const draft=clone(state.equipment);let side=1,selected=null,drag=null;
   const dialog=document.createElement('dialog');dialog.className='door-editor';
   const referenceUrl=`/api/projects/${encodeURIComponent(state.projectId)}/reference-sheets/door-installation`;
   const typeOptions=Object.entries(equipmentCatalog).filter(([type])=>type!=='access_point').map(([type,value])=>`<option value="${type}">${value.name}</option>`).join('');
   dialog.innerHTML=`<form method="dialog"><button class="door-close" aria-label="Закрыть">×</button></form>
-    <h2>${escapeHtml(door.accessPointCode||'Точка доступа не назначена')} <small>· дверь ${escapeHtml(door.id)}</small></h2>
+    <h2>${escapeHtml(accessPoint.code)} <small>· дверь ${escapeHtml(door.id)}</small></h2>
     <p>Вид на закрытую дверь. Размещайте приборы на двух сторонах стены.</p>
     <div class="door-layout"><div class="door-workspace">
       <div class="door-workspace__toolbar"><button id="de-reference-toggle" aria-pressed="true">Скрыть лист 6</button><span>Сверка с проектным эскизом</span></div>
@@ -71,11 +73,11 @@ function openDoorEditor(doorId) {
     if(owned().some(other=>other.id!==item.id&&other.doorMount?.side===itemSide&&Math.abs(other.doorMount.offset-offset)<7&&Math.abs(other.mountingHeight-height)<150))return 'Слишком близко к другому прибору.';
     item.doorMount={side:itemSide,surface,offset};item.mount=surface==='wall'?'wall':'door';item.mountingHeight=height;item.hostWallId=door.wallId;Object.assign(item,DoorMount.resolve(item,state.geometry));return '';
   }
-  const createItem=type=>{const definition=equipmentCatalog[type],id=nextId('EQ',draft);return {id,type,system:'skud_intercom',code:projectEquipmentCode(type,door)||nextEquipmentCode(definition.prefix),x:door.x,y:door.y,rotation:door.rotation||0,hostDoorId:doorId,hostWallId:door.wallId,mount:definition.mount,mountingHeight:definition.height,status:'proposed'};};
+  const createItem=type=>{const definition=equipmentCatalog[type],id=nextId('EQ',draft);return {id,type,system:'skud_intercom',code:projectEquipmentCode(type,door)||nextEquipmentCode(definition.prefix),x:door.x,y:door.y,rotation:door.rotation||0,accessPointId:accessPoint.id,hostDoorId:doorId,hostWallId:door.wallId,mount:definition.mount,mountingHeight:definition.height,status:'proposed'};};
   q('#de-item').onchange=event=>{selected=event.target.value;fields();render();};
   dialog.querySelectorAll('[data-side]').forEach(button=>button.onclick=()=>{side=Number(button.dataset.side);render();});
-  q('#de-add').onclick=()=>{if(!door.accessPointCode)return q('#de-warning').textContent='Сначала задайте двери код точки доступа, например ТД.1.1.';const type=q('#de-type').value;if(owned().some(item=>item.type===type))return q('#de-warning').textContent='Такой прибор уже есть у этой двери.';const item=createItem(type);draft.push(item);selected=item.id;fields();render();};
-  q('#de-template').onclick=()=>{if(!door.accessPointCode)return q('#de-warning').textContent='Сначала задайте двери код точки доступа, например ТД.1.1.';const touched=Sheet6DoorTemplate.apply(draft,door,side,createItem);touched.forEach(item=>{item.code=projectEquipmentCode(item.type,door);Object.assign(item,DoorMount.resolve(item,state.geometry));});selected=touched[0]?.id||selected;q('#de-warning').textContent=`Шаблон листа 6: ${touched.length} позиций. Проверьте обе стороны.`;fields();render();};
+  q('#de-add').onclick=()=>{const type=q('#de-type').value;if(owned().some(item=>item.type===type))return q('#de-warning').textContent='Такой прибор уже есть у этой двери.';const item=createItem(type);draft.push(item);selected=item.id;fields();render();};
+  q('#de-template').onclick=()=>{const touched=Sheet6DoorTemplate.apply(draft,door,side,createItem);touched.forEach(item=>{item.accessPointId=accessPoint.id;item.code=projectEquipmentCode(item.type,door);Object.assign(item,DoorMount.resolve(item,state.geometry));});selected=touched[0]?.id||selected;q('#de-warning').textContent=`Шаблон листа 6: ${touched.length} позиций. Проверьте обе стороны.`;fields();render();};
   q('#de-reference-toggle').onclick=event=>{const hidden=reference.toggleAttribute('hidden');event.currentTarget.setAttribute('aria-pressed',String(!hidden));event.currentTarget.textContent=hidden?'Показать лист 6':'Скрыть лист 6';};
   dialog.querySelectorAll('[data-reference-zoom]').forEach(button=>button.onclick=()=>{referenceZoom=Math.max(50,Math.min(250,referenceZoom+Number(button.dataset.referenceZoom)));referenceImage.style.width=`${referenceZoom}%`;q('#de-reference-zoom').value=`${referenceZoom}%`;});
   referenceViewport.onwheel=event=>{if(!event.ctrlKey&&!event.metaKey)return;event.preventDefault();referenceZoom=Math.max(50,Math.min(250,referenceZoom+(event.deltaY<0?25:-25)));referenceImage.style.width=`${referenceZoom}%`;q('#de-reference-zoom').value=`${referenceZoom}%`;};
@@ -84,7 +86,7 @@ function openDoorEditor(doorId) {
   svg.onpointerdown=event=>{const hit=event.target.closest('[data-device]');if(hit){selected=hit.dataset.device;fields();drag=selected;svg.setPointerCapture(event.pointerId);render();}else if(selected)place(event);};
   function place(event){const point=new DOMPoint(event.clientX,event.clientY).matrixTransform(svg.getScreenCTM().inverse());q('#de-side').value=side;q('#de-warning').textContent=position(Math.round(point.x*side),Math.round(-point.y*2)*10);fields();render();}
   svg.onpointermove=event=>{if(drag)place(event);};svg.onpointerup=svg.onpointercancel=()=>{drag=null;};
-  q('#de-apply').onclick=()=>{beginMutation('equipment');state.equipment=draft;drawEquipment();showGeometryCard();dialog.close();};
+  q('#de-apply').onclick=()=>{beginMutation('equipment');accessPoint.corridorSide=side;state.equipment=draft;drawEquipment();showGeometryCard();dialog.close();};
   dialog.addEventListener('cancel',event=>event.stopPropagation());dialog.addEventListener('keydown',event=>event.stopPropagation());dialog.onclose=()=>dialog.remove();render();dialog.showModal();
 }
 if(typeof module!=='undefined')module.exports={doorHingeView,doorOpeningView};

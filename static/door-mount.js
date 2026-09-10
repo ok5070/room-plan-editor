@@ -18,7 +18,7 @@ const DoorMount = {
       rotation=Math.atan2(vy*direction,vx*direction);ux=Math.cos(rotation);uy=Math.sin(rotation);
     }
     const thickness=m.surface==='leaf'?3:(w.thickness||7)+ (m.surface==='frame'?2:0);
-    const depth={controller:90,power_supply:120,battery:100,reader:30,exit_button:28,emergency_release:32,lock:55,door_contact:22,junction_box:60,intercom_panel:35,intercom_monitor:40}[item.type]||40;
+    const depth={controller:90,power_supply:120,battery:100,reader:30,exit_button:28,emergency_release:32,lock:55,lock_strike:22,door_contact:22,junction_box:60,intercom_panel:35,intercom_monitor:40}[item.type]||40;
     const gap=thickness/2+Math.max(2,depth*.05)/2+.3;
     return {...item,x:x-uy*m.side*gap,y:y+ux*m.side*gap,rotation};
   }

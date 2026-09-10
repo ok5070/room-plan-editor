@@ -8,6 +8,7 @@ const Sheet6DoorTemplate = {
     return [
       {type:'reader', side:corridorSide, surface:'wall', offset:corridorSide*jamb, height:1100},
       {type:'lock', side:protectedSide, surface:'frame', offset:protectedSide*10, height:2050},
+      {type:'lock_strike', side:protectedSide, surface:'leaf', offset:protectedSide*10, height:2050},
       {type:'door_contact', side:protectedSide, surface:'frame', offset:protectedSide*-14, height:2080},
       {type:'door_closer', side:protectedSide, surface:'leaf', offset:hingeOffset, height:1980},
       {type:'emergency_release', side:protectedSide, surface:'wall', offset:protectedSide*jamb, height:1750},

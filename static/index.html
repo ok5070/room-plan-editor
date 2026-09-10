@@ -9,13 +9,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&amp;family=Unbounded:wght@500;600&amp;display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260910-7" />
     <script src="https://pixijs.download/release/pixi.min.js" defer></script>
     <script src="/static/door-mount.js" defer></script>
     <script src="/static/door-template.js" defer></script>
-    <script src="/static/plan-25d.js" defer></script>
+    <script src="/static/plan-25d.js?v=20260910-12" defer></script>
     <script src="/static/door-editor.js" defer></script>
-    <script src="/static/app-v2.js" defer></script>
+    <script src="/static/app-v2.js?v=20260910-16" defer></script>
   </head>
   <body>
     <section class="cover" id="cover" aria-labelledby="cover-title">
@@ -64,13 +64,21 @@
             <label for="project-list">Сохранённые проекты</label>
             <select id="project-list"></select>
             <button id="open-project" type="button">Открыть проект</button>
+            <button id="archive-project" type="button" class="project-secondary-action">Переместить текущий проект в архив</button>
+            <details class="project-archive">
+              <summary>Архив проектов <span id="archived-project-count">0</span></summary>
+              <select id="archived-project-list" aria-label="Архивные проекты"></select>
+              <div class="project-archive__actions"><button id="restore-project" type="button">Восстановить</button><button id="delete-project" type="button">Удалить окончательно</button></div>
+            </details>
             <label for="new-project-name">Новый проект</label>
             <input id="new-project-name" maxlength="120" placeholder="Название объекта">
             <button id="create-project" type="button">Создать проект</button>
-            <label for="project-source-file">Добавить исходный файл (до 25 МБ)</label>
+            <label for="project-source-file">Добавить исходный файл (до 100 МБ)</label>
             <input id="project-source-file" type="file" accept=".pdf,.dwg,.dxf,.png,.jpg,.jpeg">
             <ul id="project-files"></ul>
-            <p class="editor-help">Файлы хранятся локально внутри проекта. Добавление исходника не заменяет геометрию. Для проверки CAD используйте «Загрузить DXF / DWG».</p>
+            <button id="analyze-sources" type="button" class="project-action">Преобразовать в рабочий проект</button>
+            <div id="source-analysis" class="source-analysis" aria-live="polite"></div>
+            <p class="editor-help">Загрузка только сохраняет исходник. «Преобразовать» находит листы и подложки, но не изменяет стены, двери или оборудование без вашего выбора.</p>
           </section>
           <section class="sidebar__section project-summary">
             <p class="section-label">Объект</p>
@@ -96,33 +104,45 @@
             <div class="editor-tools" role="toolbar" aria-label="Инструменты редактирования">
               <button type="button" class="tool-button is-active" data-tool="select" title="Выбор и перемещение (V)">Выбор</button>
               <button type="button" class="tool-button" data-tool="pan">Перемещение плана</button>
+              <button type="button" class="tool-button" data-tool="cad-area" title="Выделить фрагмент CAD двумя углами">Область CAD</button>
               <button type="button" class="tool-button" data-tool="wall" title="Наружная или капитальная стена (W)">Стена</button>
               <button type="button" class="tool-button" data-tool="partition" title="Внутренняя перегородка (P)">Перегородка</button>
+              <button type="button" class="tool-button" data-tool="column-round" title="Круглая колонна">Колонна ○</button>
+              <button type="button" class="tool-button" data-tool="column-square" title="Квадратная колонна">Колонна □</button>
+              <button type="button" class="tool-button" data-tool="ceiling-zone" title="Прямоугольная потолочная зона">Потолочная зона</button>
               <button type="button" class="tool-button" data-tool="door-left" title="Одинарная дверь, открывание налево (L)">Дверь ←</button>
               <button type="button" class="tool-button" data-tool="door-right" title="Одинарная дверь, открывание направо (R)">Дверь →</button>
               <button type="button" class="tool-button" data-tool="door-double" title="Двойная распашная дверь (D)">Двойная дверь</button>
               <button type="button" class="tool-button" data-tool="window" title="Окно с привязкой к стене (O)">Окно</button>
+            </div>
+            <div class="cad-workflow" id="cad-workflow" hidden>
+              <b>Черновик архитектуры из CAD</b>
+              <p id="cad-area-status">Выделите область двумя точками на плане.</p>
+              <div id="cad-layer-choices" class="cad-layer-choices"></div>
+              <button type="button" id="find-cad-architecture" disabled>Найти стены в области</button>
+              <div id="cad-proposal-actions" hidden>
+                <p id="cad-proposal-status"></p>
+                <button type="button" id="apply-cad-proposal">Добавить в редактируемый план</button>
+                <button type="button" id="clear-cad-proposal">Сбросить черновик</button>
+              </div>
             </div>
             <div class="geometry-legend" aria-label="Цвета архитектурных элементов">
               <span><i class="geometry-legend__line geometry-legend__line--wall"></i>Стена</span>
               <span><i class="geometry-legend__line geometry-legend__line--partition"></i>Перегородка</span>
               <span><i class="geometry-legend__line geometry-legend__line--window"></i>Окно</span>
             </div>
-            <div class="editor-actions">
-              <button type="button" id="delete-element" disabled>Удалить</button>
-              <button type="button" id="undo-edit" disabled>Отменить</button>
-              <button type="button" id="redo-edit" disabled>Повторить</button>
-            </div>
-            <label class="editor-option">
-              <span>Привязка к сетке 10 px</span>
-              <input id="snap-toggle" type="checkbox" checked />
-            </label>
-            <label class="editor-option editor-option--range">
-              <span>Прозрачность подложки</span>
-              <input id="background-opacity" type="range" min="10" max="100" value="72" />
-            </label>
-            <button class="save-geometry" id="save-geometry" type="button" disabled>Сохранить геометрию</button>
             <p class="editor-help">Стена/перегородка: две точки. Дверь или окно: нажмите рядом со стеной. Выбор: перетаскивание вдоль стены; Alt — перенос на другую стену; Delete — удаление. Пробел + перетаскивание — сдвиг всего плана. «Весь план» — центрирование.</p>
+          </section>
+
+          <section class="sidebar__section system-block" id="cctv-equipment-section">
+            <div class="section-heading"><p class="section-label">Охранное телевидение</p><span id="cctv-equipment-status">0 камер</span></div>
+            <p class="editor-help">Выберите тип монтажа и укажите место камеры на плане.</p>
+            <div class="equipment-palette" role="toolbar" aria-label="Камеры охранного телевидения">
+              <button class="equipment-tool equipment-tool--cctv" data-equipment-type="camera_ceiling"><b>КМ</b><span>На потолке<br>без кронштейна</span></button>
+              <button class="equipment-tool equipment-tool--cctv" data-equipment-type="camera_ceiling_bracket"><b>КК</b><span>На потолке<br>с кронштейном</span></button>
+            </div>
+            <button class="save-geometry" id="save-cctv-equipment" type="button" disabled>Сохранить камеры</button>
+            <p class="editor-help">Сектор на плане показывает направление, угол и условную дальность обзора.</p>
           </section>
 
           <section class="sidebar__section system-block" id="skud-equipment-section">
@@ -130,18 +150,19 @@
             <p class="editor-help">Выберите прибор, затем укажите место на плане. Дверные устройства устанавливаются рядом с существующей дверью.</p>
             <div class="equipment-palette" role="toolbar" aria-label="Оборудование СКУД и домофонии">
               <button class="equipment-tool" data-equipment-type="access_point"><b>ТД</b><span>Точка доступа</span></button>
-              <button class="equipment-tool" data-equipment-type="controller"><b>AR</b><span>Контроллер</span></button>
-              <button class="equipment-tool" data-equipment-type="reader"><b>YK</b><span>Считыватель</span></button>
-              <button class="equipment-tool" data-equipment-type="exit_button"><b>BGV</b><span>Кнопка выхода</span></button>
-              <button class="equipment-tool equipment-tool--alarm" data-equipment-type="emergency_release"><b>BGM</b><span>Аварийный выход</span></button>
-              <button class="equipment-tool" data-equipment-type="lock"><b>UG</b><span>Замок</span></button>
-              <button class="equipment-tool" data-equipment-type="door_contact"><b>BGB</b><span>Магн. контакт</span></button>
-              <button class="equipment-tool" data-equipment-type="door_closer"><b>4</b><span>Доводчик</span></button>
-              <button class="equipment-tool equipment-tool--power" data-equipment-type="power_supply"><b>R</b><span>Источник питания</span></button>
+              <button class="equipment-tool" data-equipment-type="controller"><b>КНТ</b><span>Контроллер</span></button>
+              <button class="equipment-tool" data-equipment-type="reader"><b>СЧТ</b><span>Считыватель</span></button>
+              <button class="equipment-tool" data-equipment-type="exit_button"><b>КВ</b><span>Кнопка выхода</span></button>
+              <button class="equipment-tool equipment-tool--alarm" data-equipment-type="emergency_release"><b>АВР</b><span>Аварийный выход</span></button>
+              <button class="equipment-tool" data-equipment-type="lock"><b>ЗМК</b><span>Замок</span></button>
+              <button class="equipment-tool" data-equipment-type="lock_strike"><b>ОП</b><span>Ответная часть</span></button>
+              <button class="equipment-tool" data-equipment-type="door_contact"><b>МКД</b><span>Магн. контакт</span></button>
+              <button class="equipment-tool" data-equipment-type="door_closer"><b>ДОВ</b><span>Доводчик</span></button>
+              <button class="equipment-tool equipment-tool--power" data-equipment-type="power_supply"><b>БП</b><span>Источник питания</span></button>
               <button class="equipment-tool equipment-tool--power" data-equipment-type="battery"><b>АК</b><span>Аккумулятор</span></button>
               <button class="equipment-tool" data-equipment-type="junction_box"><b>КС</b><span>Соед. коробка</span></button>
-              <button class="equipment-tool equipment-tool--intercom" data-equipment-type="intercom_panel"><b>ДП</b><span>Панель домофона</span></button>
-              <button class="equipment-tool equipment-tool--intercom" data-equipment-type="intercom_monitor"><b>ВМ</b><span>Монитор домофона</span></button>
+              <button class="equipment-tool equipment-tool--intercom" data-equipment-type="intercom_panel"><b>ВП</b><span>Панель домофона</span></button>
+              <button class="equipment-tool equipment-tool--intercom" data-equipment-type="intercom_monitor"><b>АУ</b><span>Монитор домофона</span></button>
             </div>
             <button class="save-geometry" id="save-equipment" type="button" disabled>Сохранить оборудование</button>
             <p class="editor-help">Кабельные трассы и материалы добавим следующим самостоятельным инструментом.</p>
@@ -160,6 +181,9 @@
             <label class="editor-option">Поворот <output id="rotation-value">0°</output></label>
             <input class="view-range" id="view-rotation" aria-label="Поворот плана" type="range" min="0" max="360" value="0">
             <label class="editor-option"><span>Показывать подложку PDF</span><input type="checkbox" id="view-source"></label>
+            <label class="editor-option"><span>Показывать секторы камер</span><input type="checkbox" id="view-camera-coverage" checked></label>
+            <label class="editor-option">Насыщенность секторов <output id="view-camera-opacity-value">18%</output></label>
+            <input class="view-range" id="view-camera-opacity" aria-label="Насыщенность секторов камер" type="range" min="5" max="45" step="1" value="18">
             <p class="editor-help">Мышь — вращение; Shift + перетаскивание — сдвиг; колесо — масштаб. Двойной щелчок — весь план.</p>
             <p class="editor-help" id="view-25d-info"></p>
             <p class="editor-help">Высоты условные. Иллюстративная визуализация. Не для монтажа.</p>
@@ -183,8 +207,22 @@
             <div><p class="section-label">План 01</p><h2 id="floor-plan-title">План этажа</h2></div>
             <div class="view-switch" aria-label="Режим плана"><button id="view-2d" aria-pressed="true">План 2D</button><button id="view-25d" aria-pressed="false">Объём 2.5D</button></div>
             <div class="plan-panel__meta"><span id="source-label">Демонстрационная схема</span><span id="zoom-label">100%</span></div>
+            <div class="plan-head-actions" id="plan-head-actions" aria-label="Команды редактора">
+              <div class="editor-actions">
+                <button type="button" id="delete-element" disabled>Удалить</button>
+                <button type="button" id="undo-edit" disabled>Отменить</button>
+                <button type="button" id="redo-edit" disabled>Повторить</button>
+              </div>
+              <label class="editor-option"><span>Сетка 10 px</span><input id="snap-toggle" type="checkbox" checked /></label>
+              <label class="editor-option editor-option--range"><span>Прозрачность</span><input id="background-opacity" aria-label="Прозрачность подложки" type="range" min="10" max="100" value="72" /></label>
+              <button class="save-geometry" id="save-geometry" type="button" disabled>Сохранить геометрию</button>
+            </div>
           </div>
           <div id="floor-plan-container">
+            <div id="cad-source-preview" class="cad-source-preview" hidden>
+              <img id="cad-source-preview-image" alt="Увеличенная схема из DWG">
+              <div class="cad-source-preview__caption"><span id="cad-source-preview-title">Предварительный просмотр</span><button type="button" id="close-cad-source-preview" title="Закрыть (Esc)" aria-label="Закрыть увеличенную схему">×</button></div>
+            </div>
             <canvas id="plan-25d" hidden aria-label="Объёмный вид сохранённого плана"></canvas>
             <div class="loading" id="loading"><span></span><p>Подготавливаем план…</p></div>
             <div class="editor-hint" id="editor-hint" aria-live="polite">Режим просмотра</div>
