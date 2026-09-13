@@ -1,12 +1,12 @@
 const state = {
   app: null, world: null, project: null,
   geometry: { version: 2, canvas: {}, walls: [], doors: [], windows: [] },
-  equipment: [], markers: [], equipmentLayer: null, cadPreview: null, cadLayer: null, geometryLayer: null, draftLayer: null, backgroundSprite: null,
+  equipment: [], markers: [], equipmentLayer: null, cadPreview: null, cadLayer: null, geometryLayer: null, stagingLayer: null, draftLayer: null, backgroundSprite: null,
   scale: 1, minScale: 0.12, maxScale: 6,
   dragging: false, dragStart: null, worldStart: null,
   editorEnabled: false, tool: "select", draftStart: null, selected: null, moving: null,
   history: [], future: [], dirty: false, equipmentDirty: false,
-  viewMode: '2d', volume: null,
+  viewMode: '2d', volume: null, stagingGeometry: null, audit: null,
   projectId: new URLSearchParams(location.search).get('project') || 'initial',
 };
 
@@ -140,8 +140,11 @@ async function drawPlan() {
   state.equipmentLayer = new PIXI.Container();
   state.draftLayer = new PIXI.Container();
   state.world.addChild(state.geometryLayer, state.equipmentLayer, state.draftLayer);
+  state.stagingLayer = new PIXI.Container();
+  state.world.addChild(state.stagingLayer);
   drawGeometry();
   drawEquipment();
+  drawStagingGeometry();
   updateVisibleCount();
 }
 
@@ -243,6 +246,31 @@ function drawGeometry() {
   state.markers.forEach(marker=>{marker.visible=layers.controller.visible;});
 }
 
+function drawStagingGeometry() {
+  if (!state.stagingLayer) return;
+  state.stagingLayer.removeChildren();
+  if (!state.stagingGeometry) return;
+  state.stagingGeometry.walls.forEach((wall) => {
+    const g = new PIXI.Graphics();
+    const color = wall.type === 'partition' ? 0x38dbd0 : 0xff9f43;
+    g.moveTo(wall.x1, wall.y1).lineTo(wall.x2, wall.y2).stroke({ width: Math.max(3, wall.thickness + 4), color, alpha: 0.82, cap: 'round' });
+    state.stagingLayer.addChild(g);
+  });
+  state.stagingGeometry.doors.forEach((door) => {
+    const holder = new PIXI.Container(); holder.position.set(door.x, door.y); holder.rotation = door.rotation || 0;
+    const g = new PIXI.Graphics(); const half = door.width / 2;
+    g.moveTo(-half, 0).lineTo(half, 0).stroke({ width: 22, color: 0xffe0a3, alpha: 0.9 });
+    g.moveTo(-half, -2).lineTo(half, -2).stroke({ width: 5, color: 0xff9f43, alpha: 0.95 });
+    holder.addChild(g); state.stagingLayer.addChild(holder);
+  });
+  state.stagingGeometry.windows.forEach((windowItem) => {
+    const holder = new PIXI.Container(); holder.position.set(windowItem.x, windowItem.y); holder.rotation = windowItem.rotation || 0;
+    const g = new PIXI.Graphics(); const half = windowItem.width / 2;
+    g.moveTo(-half, -7).lineTo(half, -7).moveTo(-half, 7).lineTo(half, 7).stroke({ width: 5, color: 0x8ce8ff, alpha: 0.95 });
+    holder.addChild(g); state.stagingLayer.addChild(holder);
+  });
+}
+
 function createMarker(item) {
   const marker = new PIXI.Container();
   marker.position.set(item.x, item.y);
@@ -333,6 +361,58 @@ function nearestElement(point) {
   if (best) return best;
   state.geometry.walls.forEach((wall) => { if(!editable(wall.type)) return; const distance = projectToWall(point, wall).distance; if (distance <= tolerance && (!best || distance < best.distance)) best = { kind: "wall", id: wall.id, distance }; });
   return best;
+}
+
+function updateAuditCard(payload, status = 'staging') {
+  const metadata = payload?.metadata || {};
+  const counts = state.audit?.counts && status !== 'staging' ? state.audit.counts : { walls: payload.walls?.length || 0, rooms: payload.rooms?.length || 0, doors: payload.doors?.length || 0, windows: payload.windows?.length || 0, devices: payload.devices?.length || 0 };
+  state.audit = { source: metadata.source || state.audit?.source || 'geometry.v2', k: metadata.k ?? state.audit?.k ?? '—', counts, status };
+  $('#audit-card').hidden = false;
+  const labels = { staging: 'STAGING · НЕ СОХРАНЕНО', confirmed: 'ПОДТВЕРЖДЕНО · НЕ СОХРАНЕНО', saved: 'СОХРАНЕНО В ПРОЕКТ', rejected: 'ОТКЛОНЕНО · ПРОЕКТ БЕЗ ИЗМЕНЕНИЙ' };
+  $('#audit-status').textContent = labels[status] || status;
+  $('#audit-status').classList.toggle('status-badge--attention', status !== 'saved');
+  $('#audit-source').textContent = state.audit.source;
+  $('#audit-k').textContent = state.audit.k;
+  $('#audit-walls').textContent = String(counts.walls);
+  $('#audit-rooms').textContent = String(counts.rooms);
+  $('#audit-openings').textContent = `${counts.doors} / ${counts.windows}`;
+  $('#audit-devices').textContent = String(counts.devices);
+}
+
+function normalizeImportedGeometry(payload) {
+  if (!payload || typeof payload !== 'object') throw new Error('Файл аудита должен содержать JSON-объект');
+  if (!Array.isArray(payload.walls)) throw new Error('В geometry.v2 отсутствует массив walls');
+  const origin = payload.metadata && payload.metadata.origin;
+  const ox = Number(origin && origin.x) || 0, oy = Number(origin && origin.y) || 0;
+  const walls = payload.walls.map((wall, index) => {
+    const values = [wall.x1, wall.y1, wall.x2, wall.y2].map(Number);
+    if (values.some((value) => !Number.isFinite(value))) throw new Error(`Некорректные координаты стены ${index + 1}`);
+    return { id: String(wall.id || `W-IMP-${String(index + 1).padStart(4, '0')}`), type: wall.type === 'partition' ? 'partition' : 'wall', x1: values[0] - ox, y1: values[1] - oy, x2: values[2] - ox, y2: values[3] - oy, thickness: Math.max(2, Math.min(Number(wall.thickness) || 13, 80)) };
+  });
+  const normalizeAttached = (items, kind) => (Array.isArray(items) ? items : []).map((item, index) => ({ ...item, id: String(item.id || `${kind.toUpperCase()}-IMP-${String(index + 1).padStart(4, '0')}`), x: Number(item.x) - ox, y: Number(item.y) - oy, wallId: String(item.wallId || '') }));
+  return { version: 2, canvas: { width: Number(payload.canvas?.width) || state.project.floorPlan.width, height: Number(payload.canvas?.height) || state.project.floorPlan.height }, walls, doors: normalizeAttached(payload.doors, 'door'), windows: normalizeAttached(payload.windows, 'window') };
+}
+
+function applyStagingGeometry(payload, sourceName = 'geometry.v2') {
+  const imported = normalizeImportedGeometry(payload);
+  state.stagingGeometry = imported;
+  updateAuditCard({ ...payload, metadata: { ...(payload.metadata || {}), source: sourceName } }, 'staging');
+  state.selected = null; drawStagingGeometry(); $('#audit-actions').hidden = false;
+  showToast(`Импортирован ${sourceName}: стен — ${imported.walls.length}, дверей — ${imported.doors.length}, окон — ${imported.windows.length}`);
+}
+
+function clearStagingGeometry() { state.stagingGeometry = null; if (state.stagingLayer) state.stagingLayer.removeChildren(); $('#audit-actions').hidden = true; }
+function dismissStagingGeometry() {
+  clearStagingGeometry();
+  if (state.audit) updateAuditCard({ walls: state.geometry.walls, doors: state.geometry.doors, windows: state.geometry.windows, metadata: state.audit }, 'rejected');
+  showToast('Staging-геометрия отклонена; рабочий план не изменён');
+}
+function commitStagingGeometry() {
+  if (!state.stagingGeometry) return;
+  beginMutation(); state.geometry = clone(state.stagingGeometry); clearStagingGeometry();
+  updateAuditCard({ walls: state.geometry.walls, doors: state.geometry.doors, windows: state.geometry.windows, metadata: state.audit || {} }, 'confirmed');
+  state.selected = null; drawGeometry(); drawEquipment(); showGeometryCard(); setDirty(true);
+  showToast('Геометрия аудита принята в рабочую модель. Нажмите «Сохранить геометрию»');
 }
 
 function nextId(prefix, items) { const ids = new Set(items.map((item) => item.id)); let n = 1; while (ids.has(`${prefix}-${String(n).padStart(3, "0")}`)) n++; return `${prefix}-${String(n).padStart(3, "0")}`; }
@@ -569,7 +649,7 @@ function updateVisibleCount() { if (state.geometry) { const edited=state.geometr
 async function saveGeometry() {
   const response = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/geometry`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(state.geometry) });
   const result = await response.json(); if (!response.ok) throw new Error(result.detail || "Не удалось сохранить геометрию");
-  state.geometry = result.geometry; if(!state.equipmentDirty){state.history=[];state.future=[];} setDirty(false); drawGeometry(); showToast(`Сохранено: ${result.walls} стен, ${result.doors} дверей, ${result.windows} окон`);
+  state.geometry = result.geometry; if(!state.equipmentDirty){state.history=[];state.future=[];} setDirty(false); if (state.audit) updateAuditCard({ ...state.geometry, metadata: state.audit }, 'saved'); drawGeometry(); showToast(`Сохранено: ${result.walls} стен, ${result.doors} дверей, ${result.windows} окон`);
 }
 
 async function saveEquipment() {
@@ -705,8 +785,16 @@ function bindInterface() {
     drawEquipment();showGeometryCard();
   });
   $("#save-geometry").addEventListener("click", async () => { try { await saveGeometry(); } catch (error) { showToast(error.message, true); } });
+  $('#audit-commit-btn').addEventListener('click', commitStagingGeometry);
+  $('#audit-dismiss-btn').addEventListener('click', dismissStagingGeometry);
   $('#save-equipment').addEventListener('click',async()=>{try{await saveEquipment();}catch(error){showToast(error.message,true);}});
   $("#background-opacity").addEventListener("input", (event) => { const alpha=Number(event.target.value)/100; if (state.backgroundSprite) state.backgroundSprite.alpha=alpha; if(state.cadLayer) state.cadLayer.alpha=alpha; });
+  $('#import-v2-file').addEventListener('change', async (event) => {
+    const [file] = event.target.files; if (!file) return;
+    try { applyStagingGeometry(JSON.parse(await file.text()), file.name); }
+    catch (error) { showToast(`Не удалось импортировать geometry.v2: ${error.message}`, true); }
+    event.target.value = '';
+  });
   $("#cad-file").addEventListener("change", async (event) => { const [file] = event.target.files; if (!file) return; if(state.projectBusy){event.target.value='';return showToast('Дождитесь завершения загрузки файла');} state.projectBusy=true; try { await uploadCad(file); } catch (error) { showToast(error.message, true); } finally {state.projectBusy=false;event.target.value = "";} });
   window.addEventListener("keydown", (event) => {
     if (document.querySelector('dialog[open]') || state.viewMode === '25d' || !state.editorEnabled || ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
@@ -721,6 +809,7 @@ function bindInterface() {
 async function setViewMode(mode) {
   if (!state.app || mode === state.viewMode || state.viewLoading) return;
   if (mode === '25d') {
+    if (state.stagingGeometry) return showToast('Сначала примите или отклоните staging-геометрию');
     if (state.dirty) return showToast('Сначала нажмите «Сохранить геометрию», затем включите объёмный вид');
     state.viewLoading = true;
     try {

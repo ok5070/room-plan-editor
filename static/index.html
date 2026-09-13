@@ -113,6 +113,11 @@
               <button type="button" id="undo-edit" disabled>Отменить</button>
               <button type="button" id="redo-edit" disabled>Повторить</button>
             </div>
+            <div class="editor-actions">
+              <label class="editor-option" for="import-v2-file">Импорт аудита (v2)
+                <input id="import-v2-file" type="file" accept=".json,application/json" />
+              </label>
+            </div>
             <label class="editor-option">
               <span>Привязка к сетке 10 px</span>
               <input id="snap-toggle" type="checkbox" checked />
@@ -175,6 +180,12 @@
               <span class="crosshair" aria-hidden="true"></span>
               <p>Выберите объект на плане</p>
             </div>
+          </section>
+          <section class="audit-card" id="audit-card" aria-live="polite" hidden>
+            <div class="audit-card__head"><p class="section-label">АУДИТ CAD</p><span class="status-badge" id="audit-status">не загружен</span></div>
+            <p class="audit-card__source" id="audit-source">—</p>
+            <dl><dt>Масштаб k</dt><dd id="audit-k">—</dd><dt>Стены</dt><dd id="audit-walls">—</dd><dt>Помещения</dt><dd id="audit-rooms">—</dd><dt>Двери / окна</dt><dd id="audit-openings">—</dd><dt>Устройства</dt><dd id="audit-devices">—</dd></dl>
+            <div class="audit-actions" id="audit-actions" hidden><button id="audit-commit-btn" type="button">Принять геометрию</button><button id="audit-dismiss-btn" type="button">Отклонить</button></div>
           </section>
         </aside>
 
