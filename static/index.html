@@ -15,7 +15,7 @@
     <script src="/static/door-template.js" defer></script>
     <script src="/static/plan-25d.js" defer></script>
     <script src="/static/door-editor.js" defer></script>
-    <script src="/static/app-v2.js" defer></script>
+    <script src="/static/app-v2.js?v=3" defer></script>
   </head>
   <body>
     <section class="cover" id="cover" aria-labelledby="cover-title">
@@ -67,10 +67,17 @@
             <label for="new-project-name">Новый проект</label>
             <input id="new-project-name" maxlength="120" placeholder="Название объекта">
             <button id="create-project" type="button">Создать проект</button>
-            <label for="project-source-file">Добавить исходный файл (до 25 МБ)</label>
+            <label for="project-source-file">Добавить исходный файл (до 250 МБ; CAD распознаётся)</label>
             <input id="project-source-file" type="file" accept=".pdf,.dwg,.dxf,.png,.jpg,.jpeg">
             <ul id="project-files"></ul>
-            <p class="editor-help">Файлы хранятся локально внутри проекта. Добавление исходника не заменяет геометрию. Для проверки CAD используйте «Загрузить DXF / DWG».</p>
+            <p class="editor-help">Файлы хранятся локально внутри проекта. DWG/DXF автоматически превращаются в редактируемые стены и двери; PDF и изображения сохраняются как исходники.</p>
+            <div id="cad-layout-picker" hidden>
+              <label for="cad-layout-select">Листы проекта</label>
+              <div id="cad-layout-gallery" class="cad-layout-gallery"></div>
+              <select id="cad-layout-select"></select>
+              <button id="cad-layout-apply" class="save-geometry" type="button" disabled>Выбрать страницу</button>
+              <p class="editor-help">Выберите лист со схемой этажа. Боковые раскладки и узлы не используем как основной план.</p>
+            </div>
           </section>
           <section class="sidebar__section project-summary">
             <p class="section-label">Объект</p>

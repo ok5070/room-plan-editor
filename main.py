@@ -27,7 +27,7 @@ PROJECT_FILE = BASE_DIR / "data" / "project.json"
 GEOMETRY_FILE = BASE_DIR / "data" / "geometry.json"
 PROJECTS_DIR = BASE_DIR / "data" / "projects"
 PROJECTS_LOCK = RLock()
-MAX_DXF_SIZE = 25 * 1024 * 1024
+MAX_DXF_SIZE = 250 * 1024 * 1024
 EQUIPMENT_TYPES = {
     "access_point", "controller", "reader", "exit_button", "emergency_release",
     "lock", "door_contact", "door_closer", "power_supply", "battery", "junction_box",
@@ -363,12 +363,179 @@ def extract_equipment(document: ezdxf.document.Drawing) -> list[dict[str, Any]]:
     return equipment
 
 
+def extract_cad_geometry(document: ezdxf.document.Drawing) -> dict[str, Any]:
+    """Build editable plan geometry from explicitly named CAD layers.
+
+    This is intentionally deterministic: only line/polyline entities on layers
+    that look architectural are promoted to walls, and door blocks/points are
+    attached to the nearest detected wall. The full CAD preview remains the
+    source of truth for anything that is not confidently classified.
+    """
+    wall_words = ("wall", "walls", "a-wall", "стен", "перегород", "partition", "арх")
+    door_words = ("door", "doors", "двер", "gate", "калит", "турникет")
+    segments: list[tuple[float, float, float, float, str]] = []
+
+    def is_wall_layer(layer: str) -> bool:
+        value = layer.lower()
+        return any(word in value for word in wall_words)
+
+    def add_segment(start: Any, end: Any, layer: str) -> None:
+        x1, y1 = float(start.x), float(start.y)
+        x2, y2 = float(end.x), float(end.y)
+        if not all(math.isfinite(value) for value in (x1, y1, x2, y2)):
+            return
+        if math.hypot(x2 - x1, y2 - y1) < 0.01:
+            return
+        segments.append((x1, y1, x2, y2, layer))
+
+    def visit(entity: Any, inherited_layer: str | None = None, depth: int = 0) -> None:
+        if depth > 4:
+            return
+        kind = entity.dxftype()
+        own_layer = str(entity.dxf.get("layer", inherited_layer or "0"))
+        layer = inherited_layer if own_layer == "0" and inherited_layer else own_layer
+        if not is_wall_layer(layer):
+            if kind in {"INSERT", "DIMENSION"}:
+                try:
+                    for child in entity.virtual_entities():
+                        visit(child, layer, depth + 1)
+                except (AttributeError, ValueError, TypeError):
+                    pass
+            return
+        if kind == "LINE":
+            add_segment(entity.dxf.start, entity.dxf.end, layer)
+        elif kind == "LWPOLYLINE":
+            points = [(point[0], point[1]) for point in entity.get_points("xy")]
+            for start, end in zip(points, points[1:]):
+                add_segment(type("Point", (), {"x": start[0], "y": start[1]})(),
+                            type("Point", (), {"x": end[0], "y": end[1]})(), layer)
+            if entity.closed and len(points) > 2:
+                add_segment(type("Point", (), {"x": points[-1][0], "y": points[-1][1]})(),
+                            type("Point", (), {"x": points[0][0], "y": points[0][1]})(), layer)
+        elif kind == "POLYLINE":
+            points = [v.dxf.location for v in entity.vertices]
+            for start, end in zip(points, points[1:]):
+                add_segment(start, end, layer)
+            if entity.is_closed and len(points) > 2:
+                add_segment(points[-1], points[0], layer)
+        elif kind in {"INSERT", "DIMENSION"}:
+            try:
+                for child in entity.virtual_entities():
+                    visit(child, layer, depth + 1)
+            except (AttributeError, ValueError, TypeError):
+                pass
+
+    for entity in document.modelspace():
+        visit(entity)
+
+    # Remove exact/reversed duplicates often present in exported polylines.
+    unique: list[tuple[float, float, float, float, str]] = []
+    seen: set[tuple[float, float, float, float, str]] = set()
+    for segment in segments:
+        x1, y1, x2, y2, layer = segment
+        key = (round(x1, 3), round(y1, 3), round(x2, 3), round(y2, 3), layer.lower())
+        reverse = (key[2], key[3], key[0], key[1], key[4])
+        if key in seen or reverse in seen:
+            continue
+        seen.add(key)
+        unique.append(segment)
+
+    if not unique:
+        return {"version": 2, "canvas": {}, "walls": [], "doors": [], "windows": []}
+
+    min_x = min(min(item[0], item[2]) for item in unique)
+    max_x = max(max(item[0], item[2]) for item in unique)
+    min_y = min(min(item[1], item[3]) for item in unique)
+    max_y = max(max(item[1], item[3]) for item in unique)
+    extent = max(max_x - min_x, max_y - min_y, 1.0)
+    # The sample CAD plans use metres (for example 20 x 14). Keep the
+    # architectural dimensions in source units and convert them together with
+    # the coordinates below; otherwise the validator's 80-unit ceiling makes
+    # walls visibly heavier than doors.
+    default_thickness = 0.18 if extent < 100 else 180.0
+    walls: list[dict[str, Any]] = []
+    for index, (x1, y1, x2, y2, layer) in enumerate(unique, 1):
+        layer_name = layer.lower()
+        wall_type = "partition" if any(word in layer_name for word in ("partition", "перегород", "p-wall")) else "wall"
+        walls.append({"id": f"CAD-W-{index:04d}", "type": wall_type,
+                      "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                      "thickness": default_thickness, "layer": layer})
+
+    def nearest_wall(x: float, y: float) -> tuple[dict[str, Any] | None, float, float, float]:
+        best: tuple[dict[str, Any] | None, float, float, float] = (None, float("inf"), x, y)
+        for wall in walls:
+            dx, dy = wall["x2"] - wall["x1"], wall["y2"] - wall["y1"]
+            length_sq = dx * dx + dy * dy or 1.0
+            t = max(0.0, min(1.0, ((x - wall["x1"]) * dx + (y - wall["y1"]) * dy) / length_sq))
+            px, py = wall["x1"] + t * dx, wall["y1"] + t * dy
+            distance = math.hypot(x - px, y - py)
+            if distance < best[1]:
+                best = (wall, distance, px, py)
+        return best
+
+    tolerance = max(25.0, min(120.0, extent * 0.02))
+    doors: list[dict[str, Any]] = []
+    unmatched_doors = 0
+    for item in extract_equipment(document):
+        if item["type"] != "door" or not any(word in item["layer"].lower() for word in door_words):
+            continue
+        wall, distance, x, y = nearest_wall(item["x"], item["y"])
+        if wall is None or distance > tolerance:
+            unmatched_doors += 1
+            continue
+        rotation = math.atan2(wall["y2"] - wall["y1"], wall["x2"] - wall["x1"])
+        doors.append({"id": f"CAD-D-{len(doors) + 1:04d}", "wallId": wall["id"],
+                      "x": x, "y": y, "width": 48, "rotation": rotation,
+                      "swing": "right", "openingSide": 1, "leafCount": 1,
+                      "readerCount": 1, "source": item.get("block")})
+
+    return {"version": 2, "canvas": {}, "walls": walls, "doors": doors, "windows": [],
+            "metadata": {"wallLayers": sorted({item["layer"] for item in walls}),
+                         "unmatchedDoors": unmatched_doors}}
+
+
+def normalize_cad_geometry(geometry: dict[str, Any], preview: dict[str, Any], floor: dict[str, Any]) -> dict[str, Any]:
+    """Apply the exact CAD-preview transform to editable geometry."""
+    source = preview.get("sourceBounds") or preview.get("bounds")
+    transform = preview.get("transform")
+    if not source or not transform:
+        return geometry
+    scale, padding = float(transform["scale"]), float(transform["padding"])
+
+    def point(x: float, y: float) -> tuple[float, float]:
+        return (padding + (x - source["minX"]) * scale,
+                float(floor["height"]) - padding - (y - source["minY"]) * scale)
+
+    result = {**geometry, "canvas": {"width": floor["width"], "height": floor["height"]}}
+    source_extent = max(source["maxX"] - source["minX"], source["maxY"] - source["minY"])
+    source_wall_thickness = 0.18 if source_extent < 100 else 180.0
+    source_door_width = 0.9 if source_extent < 100 else 900.0
+    wall_thickness = max(6.0, min(32.0, source_wall_thickness * scale))
+    door_width = max(36.0, min(140.0, source_door_width * scale))
+    result["walls"] = [{**wall, "x1": point(wall["x1"], wall["y1"])[0], "y1": point(wall["x1"], wall["y1"])[1],
+                        "x2": point(wall["x2"], wall["y2"])[0], "y2": point(wall["x2"], wall["y2"])[1],
+                        "thickness": wall_thickness} for wall in geometry.get("walls", [])]
+    result["doors"] = [{**door, "x": point(door["x"], door["y"])[0], "y": point(door["x"], door["y"])[1],
+                        "rotation": -door["rotation"], "width": door_width} for door in geometry.get("doors", [])]
+    return result
+
+
 def read_text_dxf(payload: bytes) -> ezdxf.document.Drawing:
     for encoding in ("utf-8", "cp1251", "latin-1"):
         try:
             return ezdxf.read(io.StringIO(payload.decode(encoding)))
         except (UnicodeDecodeError, ezdxf.DXFError):
             continue
+    # ODA can emit a valid ASCII DXF whose section structure is accepted by
+    # ezdxf.readfile() but not by the StringIO reader (notably after DWG export).
+    # Use the same parser against a temporary file before reporting a bad DXF.
+    with tempfile.NamedTemporaryFile(suffix=".dxf") as stream:
+        stream.write(payload)
+        stream.flush()
+        try:
+            return ezdxf.readfile(stream.name)
+        except (OSError, ezdxf.DXFError):
+            pass
     raise ValueError("Файл DXF не удалось прочитать")
 
 
@@ -507,6 +674,52 @@ def normalize_cad_preview(preview: dict[str, Any], floor: dict[str, Any]) -> dic
                         "rotation": -label["rotation"]} for label in preview["labels"]]}
 
 
+def detect_cad_areas(preview: dict[str, Any]) -> list[dict[str, Any]]:
+    """Find separate drawing clusters in Model space for sheet selection."""
+    paths = preview.get("paths", [])
+    if not paths or not preview.get("bounds"):
+        return []
+    bounds = preview["bounds"]
+    width = max(bounds["maxX"] - bounds["minX"], 1)
+    height = max(bounds["maxY"] - bounds["minY"], 1)
+    cell = max(80.0, min(width, height) / 18.0)
+    cells: dict[tuple[int, int], int] = {}
+    path_cells: list[set[tuple[int, int]]] = []
+    for path in paths:
+        points = path.get("points", [])
+        if len(points) < 2:
+            path_cells.append(set())
+            continue
+        xs, ys = zip(*points)
+        touched = {(int((x - bounds["minX"]) / cell), int((y - bounds["minY"]) / cell))
+                   for x, y in ((min(xs), min(ys)), (max(xs), max(ys)))}
+        path_cells.append(touched)
+        for key in touched:
+            cells[key] = cells.get(key, 0) + 1
+    occupied = {key for key, count in cells.items() if count >= 3}
+    groups: list[set[tuple[int, int]]] = []
+    while occupied:
+        seed = occupied.pop(); group = {seed}; stack = [seed]
+        while stack:
+            x, y = stack.pop()
+            for neighbor in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if neighbor in occupied:
+                    occupied.remove(neighbor); group.add(neighbor); stack.append(neighbor)
+        if len(group) >= 2:
+            groups.append(group)
+    areas = []
+    for index, group in enumerate(sorted(groups, key=lambda g: (min(y for _, y in g), min(x for x, _ in g))), 1):
+        members = [i for i, touched in enumerate(path_cells) if touched & group]
+        if len(members) < 5:
+            continue
+        xs = [x for i in members for x, _ in paths[i]["points"]]
+        ys = [y for i in members for _, y in paths[i]["points"]]
+        areas.append({"name": f"Model · область {index}", "bounds": {
+            "minX": min(xs), "minY": min(ys), "maxX": max(xs), "maxY": max(ys)},
+            "pathIndexes": members})
+    return areas
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -553,7 +766,7 @@ async def parse_cad(file: UploadFile = File(...), project_id: str | None = None)
 
     payload = await file.read(MAX_DXF_SIZE + 1)
     if len(payload) > MAX_DXF_SIZE:
-        raise HTTPException(status_code=413, detail="Файл больше 25 МБ")
+        raise HTTPException(status_code=413, detail="Файл больше 250 МБ")
 
     try:
         document = read_dwg(payload) if suffix == ".dwg" else read_text_dxf(payload)
@@ -566,12 +779,31 @@ async def parse_cad(file: UploadFile = File(...), project_id: str | None = None)
         ) from error
 
     equipment = extract_equipment(document)
+    raw_geometry = extract_cad_geometry(document)
     cad_preview = None
     layout_names = [name for name in document.layout_names() if name != "Model"]
     if project_id is not None:
         with PROJECTS_LOCK:
             record = read_record(project_id)
-            cad_preview = normalize_cad_preview(extract_cad_preview(document), record["project"]["floorPlan"])
+            # The global CAD control also goes through this endpoint. Persist
+            # the upload here so a parse cannot succeed while its source file
+            # disappears; the project sidebar upload is deduplicated by name
+            # and size below.
+            if not any(item.get("name") == filename and item.get("size") == len(payload)
+                       for item in record.get("files", [])):
+                file_id = uuid.uuid4().hex + suffix
+                target = project_path(project_id).parent / file_id
+                target.write_bytes(payload)
+                record.setdefault("files", []).append({
+                    "id": file_id, "name": filename, "size": len(payload),
+                    "url": f"/api/projects/{project_id}/files/{file_id}",
+                })
+            raw_preview = extract_cad_preview(document)
+            cad_preview = normalize_cad_preview(raw_preview, record["project"]["floorPlan"])
+            cad_areas = detect_cad_areas(cad_preview)
+            extracted_geometry = validate_geometry(
+                normalize_cad_geometry(raw_geometry, cad_preview, record["project"]["floorPlan"])
+            )
             bounds = calculate_bounds(equipment)
             placed = []
             if bounds:
@@ -583,10 +815,15 @@ async def parse_cad(file: UploadFile = File(...), project_id: str | None = None)
                            "y": floor["height"]-100-(e["y"]-bounds["minY"])*factor} for e in equipment]
             record["project"]["equipment"] = placed
             record["cadSource"] = filename
-            record["cadLayouts"] = layout_names
-            if layout_names:
-                record["project"]["floorPlan"]["name"] = layout_names[0]
+            record["cadAreas"] = cad_areas
+            record["cadLayouts"] = layout_names + [area["name"] for area in cad_areas]
+            selected_layout = record.get("cadSelectedLayout")
+            if selected_layout not in layout_names:
+                record.pop("cadSelectedLayout", None)
+                if layout_names:
+                    record["project"]["floorPlan"]["name"] = "План CAD — выберите лист"
             record["cadPreview"] = cad_preview
+            record["geometry"] = extracted_geometry
             write_record(record)
     return {
         "source": filename,
@@ -599,6 +836,9 @@ async def parse_cad(file: UploadFile = File(...), project_id: str | None = None)
         "summary": {
             "controllers": sum(item["type"] == "controller" for item in equipment),
             "doors": sum(item["type"] == "door" for item in equipment),
+            "walls": len(raw_geometry["walls"]),
+            "recognizedDoors": len(raw_geometry["doors"]),
+            "unmatchedDoors": raw_geometry.get("metadata", {}).get("unmatchedDoors", 0),
         },
     }
 
@@ -672,6 +912,20 @@ def get_project_record(project_id: str) -> dict:
     return read_record(project_id)
 
 
+@app.put("/api/projects/{project_id}/cad-layout")
+def select_cad_layout(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    layout = str(payload.get("layout", "")).strip()
+    with PROJECTS_LOCK:
+        record = read_record(project_id)
+        layouts = record.get("cadLayouts", [])
+        if layout not in layouts:
+            raise HTTPException(422, "Выберите лист из списка CAD")
+        record["cadSelectedLayout"] = layout
+        record["project"]["floorPlan"]["name"] = layout
+        write_record(record)
+    return {"layout": layout, "cadLayouts": layouts}
+
+
 @app.put("/api/projects/{project_id}/geometry")
 def save_project_geometry(project_id: str, payload: dict[str, Any]) -> dict:
     try:
@@ -708,7 +962,7 @@ async def add_project_file(project_id: str, file: UploadFile = File(...)) -> dic
         raise HTTPException(400, "Поддерживаются PDF, DWG, DXF, PNG и JPG")
     payload = await file.read(MAX_DXF_SIZE + 1)
     if not payload or len(payload) > MAX_DXF_SIZE:
-        raise HTTPException(413, "Нужен непустой файл до 25 МБ")
+        raise HTTPException(413, "Нужен непустой файл до 250 МБ")
     file_id = uuid.uuid4().hex + suffix
     with PROJECTS_LOCK:
         record = read_record(project_id)

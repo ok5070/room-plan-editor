@@ -1,5 +1,5 @@
 const state = {
-  app: null, world: null, project: null,
+  app: null, world: null, project: null, cadAreas: [],
   geometry: { version: 2, canvas: {}, walls: [], doors: [], windows: [] },
   equipment: [], markers: [], equipmentLayer: null, cadPreview: null, cadLayer: null, geometryLayer: null, stagingLayer: null, draftLayer: null, backgroundSprite: null,
   scale: 1, minScale: 0.12, maxScale: 6,
@@ -65,9 +65,10 @@ async function loadProject() {
   $('#project-list').innerHTML = projects.map(p=>`<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('');
   const record = await loadJson(`/api/projects/${encodeURIComponent(state.projectId)}`, 'Не удалось загрузить проект');
   state.project = record.project; state.geometry = record.geometry;
-  state.cadPreview = record.cadPreview || null;
+  state.cadPreview = record.cadPreview || null; state.cadAreas = record.cadAreas || [];
   $('#project-list').value=state.projectId;
   renderProjectFiles(record.files);
+  renderCadLayouts(record.cadLayouts, record.cadSelectedLayout);
   state.geometry.windows ||= [];
   state.geometry.doors.forEach((door) => { door.leafCount = door.leafCount === 2 ? 2 : 1; door.readerCount = door.readerCount === 2 ? 2 : 1; door.accessPointCode ||= null; });
   state.equipment = state.project.equipment || [];
@@ -85,6 +86,34 @@ async function loadProject() {
 
 function renderProjectFiles(files) {
   $('#project-files').innerHTML=files.length ? files.map(f=>`<li><a href="${escapeHtml(f.url)}" download>${escapeHtml(f.name)}</a></li>`).join('') : '<li>Файлы пока не загружены</li>';
+}
+
+function renderCadLayouts(layouts, selected) {
+  const picker=$('#cad-layout-picker'), select=$('#cad-layout-select');
+  if(!picker||!select) return;
+  const names=Array.isArray(layouts)?layouts:[];
+  picker.hidden=names.length===0;
+  const gallery=$('#cad-layout-gallery');
+  gallery.innerHTML=names.map(name=>`<button type="button" class="cad-layout-card" data-cad-layout="${escapeHtml(name)}"><canvas width="220" height="130"></canvas><span>${escapeHtml(name)}</span></button>`).join('');
+  select.innerHTML=(selected&&names.includes(selected)?'': '<option value="">Выберите лист со схемой</option>')+names.map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+  if(selected&&names.includes(selected)) select.value=selected; else select.value='';
+  gallery.querySelectorAll('[data-cad-layout]').forEach(card=>card.classList.toggle('is-selected',card.dataset.cadLayout===selected));
+  gallery.querySelectorAll('canvas').forEach(canvas=>drawCadThumbnail(canvas, canvas.closest('[data-cad-layout]')?.dataset.cadLayout));
+  $('#cad-layout-apply').disabled=!selected;
+}
+
+function drawCadThumbnail(canvas, areaName) {
+  const preview=state.cadPreview, ctx=canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#e9eeeb'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  if(!preview?.paths?.length) return;
+  const area=state.cadAreas?.find(item=>item.name===areaName);
+  const bounds=area?.bounds||preview.bounds||{minX:0,minY:0,maxX:state.project.floorPlan.width,maxY:state.project.floorPlan.height};
+  const scale=Math.min((canvas.width-12)/Math.max(1,bounds.maxX-bounds.minX),(canvas.height-12)/Math.max(1,bounds.maxY-bounds.minY));
+  const point=p=>[6+(p[0]-bounds.minX)*scale,canvas.height-6-(p[1]-bounds.minY)*scale];
+  ctx.strokeStyle='#42636a';ctx.lineWidth=1;
+  let paths=preview.paths;
+  if(area) paths=area.pathIndexes.map(index=>preview.paths[index]).filter(Boolean);
+  paths.slice(0,400).forEach(path=>{if(path.points.length<2)return;ctx.beginPath();path.points.forEach((p,i)=>{const q=point(p);i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1]);});ctx.stroke();});
 }
 
 function openProject(id) {
@@ -253,7 +282,7 @@ function drawStagingGeometry() {
   state.stagingGeometry.walls.forEach((wall) => {
     const g = new PIXI.Graphics();
     const color = wall.type === 'partition' ? 0x38dbd0 : 0xff9f43;
-    g.moveTo(wall.x1, wall.y1).lineTo(wall.x2, wall.y2).stroke({ width: Math.max(3, wall.thickness + 4), color, alpha: 0.82, cap: 'round' });
+    g.moveTo(wall.x1, wall.y1).lineTo(wall.x2, wall.y2).stroke({ width: Math.max(3, wall.thickness), color, alpha: 0.78, cap: 'round' });
     state.stagingLayer.addChild(g);
   });
   state.stagingGeometry.doors.forEach((door) => {
@@ -382,15 +411,59 @@ function updateAuditCard(payload, status = 'staging') {
 function normalizeImportedGeometry(payload) {
   if (!payload || typeof payload !== 'object') throw new Error('Файл аудита должен содержать JSON-объект');
   if (!Array.isArray(payload.walls)) throw new Error('В geometry.v2 отсутствует массив walls');
-  const origin = payload.metadata && payload.metadata.origin;
-  const ox = Number(origin && origin.x) || 0, oy = Number(origin && origin.y) || 0;
+  const transform = importedGeometryTransform(payload);
   const walls = payload.walls.map((wall, index) => {
     const values = [wall.x1, wall.y1, wall.x2, wall.y2].map(Number);
     if (values.some((value) => !Number.isFinite(value))) throw new Error(`Некорректные координаты стены ${index + 1}`);
-    return { id: String(wall.id || `W-IMP-${String(index + 1).padStart(4, '0')}`), type: wall.type === 'partition' ? 'partition' : 'wall', x1: values[0] - ox, y1: values[1] - oy, x2: values[2] - ox, y2: values[3] - oy, thickness: Math.max(2, Math.min(Number(wall.thickness) || 13, 80)) };
+    const start = transform.point(values[0], values[1]), end = transform.point(values[2], values[3]);
+    return { id: String(wall.id || `W-IMP-${String(index + 1).padStart(4, '0')}`), type: wall.type === 'partition' ? 'partition' : 'wall', x1: start.x, y1: start.y, x2: end.x, y2: end.y, thickness: Math.max(2, Math.min(Number(wall.thickness) || 13, 80)) };
   });
-  const normalizeAttached = (items, kind) => (Array.isArray(items) ? items : []).map((item, index) => ({ ...item, id: String(item.id || `${kind.toUpperCase()}-IMP-${String(index + 1).padStart(4, '0')}`), x: Number(item.x) - ox, y: Number(item.y) - oy, wallId: String(item.wallId || '') }));
-  return { version: 2, canvas: { width: Number(payload.canvas?.width) || state.project.floorPlan.width, height: Number(payload.canvas?.height) || state.project.floorPlan.height }, walls, doors: normalizeAttached(payload.doors, 'door'), windows: normalizeAttached(payload.windows, 'window') };
+  const normalizeAttached = (items, kind) => (Array.isArray(items) ? items : []).map((item, index) => {
+    const point = transform.point(Number(item.x), Number(item.y));
+    return { ...item, id: String(item.id || `${kind.toUpperCase()}-IMP-${String(index + 1).padStart(4, '0')}`), x: point.x, y: point.y, rotation: transform.flipY ? -(Number(item.rotation) || 0) : Number(item.rotation) || 0, wallId: String(item.wallId || '') };
+  });
+  return { version: 2, canvas: { width: state.project.floorPlan.width, height: state.project.floorPlan.height }, walls, doors: normalizeAttached(payload.doors, 'door'), windows: normalizeAttached(payload.windows, 'window') };
+}
+
+function importedGeometryTransform(payload) {
+  const metadata = payload.metadata || {};
+  const sourceCoordinates = metadata.coordinate_system === 'source_cad';
+  if (!sourceCoordinates) {
+    const origin = metadata.origin || {};
+    const ox = Number(origin.x) || 0, oy = Number(origin.y) || 0;
+    return { point: (x, y) => ({ x: x - ox, y: y - oy }), flipY: false, mode: 'identity' };
+  }
+
+  const floor = state.project.floorPlan;
+  const source = state.cadPreview?.sourceBounds;
+  const previewTransform = state.cadPreview?.transform;
+  if (source && previewTransform) {
+    const scale = Number(previewTransform.scale), padding = Number(previewTransform.padding);
+    if (Number.isFinite(scale) && scale > 0 && Number.isFinite(padding)) {
+      return {
+        point: (x, y) => ({
+          x: padding + (x - Number(source.minX)) * scale,
+          y: Number(floor.height) - padding - (y - Number(source.minY)) * scale,
+        }),
+        flipY: true,
+        mode: 'cad-preview',
+      };
+    }
+  }
+
+  const origin = metadata.origin || {};
+  const ox = Number(origin.x) || 0, oy = Number(origin.y) || 0;
+  const sourceWidth = Math.max(1, Number(payload.canvas?.width) || 1);
+  const sourceHeight = Math.max(1, Number(payload.canvas?.height) || 1);
+  const padding = 70;
+  const scale = Math.min((Number(floor.width) - padding * 2) / sourceWidth, (Number(floor.height) - padding * 2) / sourceHeight);
+  const left = (Number(floor.width) - sourceWidth * scale) / 2;
+  const top = (Number(floor.height) - sourceHeight * scale) / 2;
+  return {
+    point: (x, y) => ({ x: left + (x - ox) * scale, y: top + sourceHeight * scale - (y - oy) * scale }),
+    flipY: true,
+    mode: 'fit-canvas',
+  };
 }
 
 function applyStagingGeometry(payload, sourceName = 'geometry.v2') {
@@ -664,10 +737,12 @@ async function uploadCad(file) {
   const response = await fetch(`/api/parse-cad?project_id=${encodeURIComponent(state.projectId)}`, { method: "POST", body: data }), result = await response.json();
   if (!response.ok) throw new Error(result.detail || "Ошибка чтения CAD");
   const record=await loadJson(`/api/projects/${encodeURIComponent(state.projectId)}`,'DWG прочитан, но результат не удалось открыть');
-  state.project=record.project;state.geometry=record.geometry;state.equipment=record.project.equipment||[];state.cadPreview=record.cadPreview||null;
+  state.project=record.project;state.geometry=record.geometry;state.equipment=record.project.equipment||[];state.cadPreview=record.cadPreview||null;state.cadAreas=record.cadAreas||[];
+  renderCadLayouts(record.cadLayouts, record.cadSelectedLayout);
+  state.history=[];state.future=[];setDirty(false);setEquipmentDirty(false);
   $("#source-label").textContent = file.name; await drawPlan(); fitPlan();
   const preview=result.preview;
-  showToast(`CAD-подложка: ${preview?.paths||0} контуров, ${preview?.labels||0} подписей, ${preview?.layers?.length||0} слоёв. Найдено оборудования: ${result.equipment.length}.`);
+  showToast(`CAD распознан: ${result.summary?.walls||0} стен, ${result.summary?.recognizedDoors||0} дверей. Найдено оборудования: ${result.equipment.length}.`);
 }
 
 function normalizeCoordinates(items, bounds) {
@@ -693,8 +768,30 @@ function bindInterface() {
     const file=event.target.files[0];if(!file)return;
     if(state.projectBusy){event.target.value='';return showToast('Дождитесь завершения загрузки файла');}
     state.projectBusy=true;
-    try {await attachProjectFile(file);showToast('Исходный файл сохранён в проекте. Это не автоматическая обводка плана.');}
+    try {
+      const isCad=/\.(dwg|dxf)$/i.test(file.name);
+      if(isCad) await uploadCad(file);
+      else {await attachProjectFile(file);showToast('Исходный файл сохранён в проекте.');}
+    }
     catch(error){showToast(error.message,true);}finally{event.target.value='';state.projectBusy=false;}
+  });
+  $('#cad-layout-select').addEventListener('change',event=>{
+    state.cadPendingLayout=event.target.value||null;
+    $('#cad-layout-apply').disabled=!state.cadPendingLayout;
+    $('#cad-layout-gallery').querySelectorAll('[data-cad-layout]').forEach(card=>card.classList.toggle('is-selected',card.dataset.cadLayout===state.cadPendingLayout));
+    if(state.cadPendingLayout) { $('#floor-plan-title').textContent=`Предпросмотр · ${state.cadPendingLayout}`; showToast(`Предпросмотр листа: ${state.cadPendingLayout}`); }
+  });
+  $('#cad-layout-gallery').addEventListener('click',event=>{
+    const card=event.target.closest('[data-cad-layout]'); if(!card)return;
+    $('#cad-layout-select').value=card.dataset.cadLayout; $('#cad-layout-select').dispatchEvent(new Event('change',{bubbles:true}));
+  });
+  $('#cad-layout-apply').addEventListener('click',async()=>{
+    if(!state.cadPendingLayout)return;
+    try {
+      const response=await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/cad-layout`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({layout:state.cadPendingLayout})});
+      const result=await response.json(); if(!response.ok) throw new Error(result.detail||'Не удалось выбрать лист CAD');
+      state.cadSelectedLayout=result.layout; state.project.floorPlan.name=result.layout; $('#floor-plan-title').textContent=result.layout; $('#cad-layout-apply').disabled=true; showToast(`Страница выбрана: ${result.layout}`);
+    } catch(error){showToast(error.message,true);}
   });
   window.addEventListener('beforeunload',event=>{if(state.dirty || state.equipmentDirty || state.projectBusy){event.preventDefault();event.returnValue='';}});
   renderLayers();
