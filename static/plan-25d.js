@@ -22,6 +22,54 @@ class Plan25D {
     canvas.addEventListener('dblclick', () => this.fit());
     this.observer = new ResizeObserver(() => this.render()); this.observer.observe(canvas.parentElement);
   }
+  findSquareColumns(walls, geometry) {
+    const attached = new Set([...(geometry.doors || []), ...(geometry.windows || [])].map(item => String(item.wallId)));
+    const endpointKey = (x, y) => `${Math.round(Number(x) * 20)},${Math.round(Number(y) * 20)}`;
+    const points = new Map(), adjacency = new Map();
+    const edges = walls.map((wall, index) => {
+      const length = Math.hypot(Number(wall.x2)-Number(wall.x1), Number(wall.y2)-Number(wall.y1));
+      if (length < 2 || length > 24 || attached.has(String(wall.id))) return null;
+      const a=endpointKey(wall.x1,wall.y1),b=endpointKey(wall.x2,wall.y2);
+      points.set(a,{x:Number(wall.x1),y:Number(wall.y1)});points.set(b,{x:Number(wall.x2),y:Number(wall.y2)});
+      const edge={wall,index,a,b,length};
+      adjacency.set(a,[...(adjacency.get(a)||[]),edge]);adjacency.set(b,[...(adjacency.get(b)||[]),edge]);
+      return edge;
+    }).filter(Boolean);
+    const found=new Map();
+    const walk=(start,current,path,used)=>{
+      if(used.length===4){
+        if(current!==start)return;
+        const ids=used.map(edge=>String(edge.wall.id)).sort();
+        const uniquePoints=path.slice(0,-1);
+        if(new Set(uniquePoints).size!==4)return;
+        const polygon=uniquePoints.map(key=>points.get(key));
+        const lengths=polygon.map((point,index)=>Math.hypot(polygon[(index+1)%4].x-point.x,polygon[(index+1)%4].y-point.y));
+        if(Math.max(...lengths)/Math.min(...lengths)>1.35)return;
+        for(let i=0;i<4;i++){
+          const previous=polygon[(i+3)%4],point=polygon[i],next=polygon[(i+1)%4];
+          const ax=previous.x-point.x,ay=previous.y-point.y,bx=next.x-point.x,by=next.y-point.y;
+          if(Math.abs((ax*bx+ay*by)/(Math.hypot(ax,ay)*Math.hypot(bx,by)))>.2)return;
+        }
+        const area=Math.abs(polygon.reduce((sum,p,i)=>sum+p.x*polygon[(i+1)%4].y-p.y*polygon[(i+1)%4].x,0))/2;
+        if(area<4||area>600)return;
+        found.set(ids.join('|'),{wallIds:ids,points:polygon,type:'square'});
+        return;
+      }
+      for(const edge of adjacency.get(current)||[]){
+        if(used.includes(edge))continue;
+        const next=edge.a===current?edge.b:edge.a;
+        if(path.includes(next)&&next!==start)continue;
+        walk(start,next,[...path,next],[...used,edge]);
+      }
+    };
+    for(const key of adjacency.keys())walk(key,key,[key],[]);
+    const claimed=new Set(),columns=[];
+    for(const column of found.values()){
+      if(column.wallIds.some(id=>claimed.has(id)))continue;
+      column.wallIds.forEach(id=>claimed.add(id));columns.push(column);
+    }
+    return {columns,wallIds:claimed};
+  }
   setModel(geometry, floorPlan, equipment = []) {
     this.faces = []; this.equipmentLabels = []; this.equipmentCount = 0; this.geometry = geometry; this.floorPlan = floorPlan;
     const walls = geometry.walls;
@@ -32,7 +80,11 @@ class Plan25D {
     const height = 150, doorHeight = 104, sill = 45, windowTop = 118;
     this.height = height;
     this.openingCount = 0;
+    const recognizedColumns=this.findSquareColumns(walls,geometry);
+    this.columnCount=recognizedColumns.columns.length;
+    recognizedColumns.columns.forEach(column=>this.prism(column.points,0,height,[212,216,213]));
     walls.forEach(w => {
+      if(recognizedColumns.wallIds.has(String(w.id)))return;
       const length = Math.hypot(w.x2 - w.x1, w.y2 - w.y1); if (length < .01) return;
       const u = {x: (w.x2 - w.x1) / length, y: (w.y2 - w.y1) / length};
       const at = t => ({x: w.x1 + u.x * t, y: w.y1 + u.y * t});
@@ -43,26 +95,31 @@ class Plan25D {
         }).filter(d => d.end > d.start);
       const cuts = [...new Set([0, length, ...openings.flatMap(d => [d.start, d.end])])].sort((a,b) => a-b);
       const color = w.type === 'partition' ? [203, 222, 220] : [228, 231, 228];
+      // One centerline becomes one restrained solid wall, regardless of how wide
+      // the two source CAD outlines were drawn.
+      const visualThickness = String(w.id).endsWith('-CL')
+        ? Math.max(2, Math.min(4, Number(w.thickness) || 2))
+        : Math.max(2, Math.min(4, (Number(w.thickness) || 13) / 4));
       // Split wall volumes at opening edges; remove only the opening's vertical interval.
       for (let i = 0; i < cuts.length - 1; i++) {
         const a = cuts[i], b = cuts[i+1], mid = (a+b)/2;
         const holes = openings.filter(d => d.start <= mid && d.end >= mid).sort((a,b) => a.low-b.low);
         let z = 0;
-        for (const hole of holes) { if (hole.low > z) this.box(at(a), at(b), w.thickness, z, hole.low, color); z = Math.max(z, hole.high); }
-        if (z < height) this.box(at(a), at(b), w.thickness, z, height, color);
+        for (const hole of holes) { if (hole.low > z) this.box(at(a), at(b), visualThickness, z, hole.low, color, true); z = Math.max(z, hole.high); }
+        if (z < height) this.box(at(a), at(b), visualThickness, z, height, color, true);
       }
       openings.forEach(d => {
         this.openingCount++;
         const a = at(d.start), b = at(d.end), width = d.end - d.start, frame = 3;
         const frameColor = d.kind === 'window' ? [85, 122, 139] : [118, 134, 139];
-        this.box(a, at(Math.min(d.end, d.start+frame)), w.thickness+2, d.low, d.high, frameColor);
-        this.box(at(Math.max(d.start, d.end-frame)), b, w.thickness+2, d.low, d.high, frameColor);
-        this.box(a, b, w.thickness+2, d.high-frame, d.high, frameColor);
+        this.box(a, at(Math.min(d.end, d.start+frame)), visualThickness+2, d.low, d.high, frameColor);
+        this.box(at(Math.max(d.start, d.end-frame)), b, visualThickness+2, d.low, d.high, frameColor);
+        this.box(a, b, visualThickness+2, d.high-frame, d.high, frameColor);
         if (d.kind === 'window') {
-          this.box(a, b, w.thickness+2, d.low, d.low+frame, frameColor);
-          this.box(at((d.start+d.end)/2-1), at((d.start+d.end)/2+1), w.thickness, d.low, d.high, frameColor);
+          this.box(a, b, visualThickness+2, d.low, d.low+frame, frameColor);
+          this.box(at((d.start+d.end)/2-1), at((d.start+d.end)/2+1), visualThickness, d.low, d.high, frameColor);
           this.box(a, b, 2, d.low+frame, d.high-frame, [171, 211, 225]);
-        } else {
+        } else if (d.swing !== 'unknown') {
           const leaf = (hinge, direction, size) => {
             // Retain the editor's hinge side and local negative-side opening.
             const angle = Math.PI / 3;
@@ -82,6 +139,12 @@ class Plan25D {
       access_point:{width:110,height:110,depth:45,color:[22,141,138]},
       controller:{width:360,height:300,depth:90,color:[23,111,159]},
       reader:{width:55,height:120,depth:30,color:[22,141,138]},
+      camera:{width:120,height:90,depth:120,color:[177,77,104]},
+      data_outlet:{width:86,height:86,depth:25,color:[57,118,168]},
+      wifi_access_point:{width:180,height:45,depth:180,color:[57,118,168]},
+      network_switch:{width:440,height:45,depth:220,color:[57,118,168]},
+      patch_panel:{width:440,height:45,depth:90,color:[57,118,168]},
+      rack:{width:600,height:2000,depth:800,color:[82,99,109]},
       exit_button:{width:86,height:86,depth:28,color:[62,155,98]},
       emergency_release:{width:88,height:88,depth:32,color:[197,75,70]},
       lock:{width:350,height:58,depth:55,color:[104,122,128]},
@@ -117,19 +180,35 @@ class Plan25D {
     }
     this.fit();
   }
-  box(a, b, thickness, low, high, color) {
+  box(a, b, thickness, low, high, color, hideEndFaces = false) {
     const len = Math.hypot(b.x-a.x,b.y-a.y); if (len < .001 || high <= low) return;
     // Small sections keep depth ordering stable where long walls cross the camera view.
     if (len > 45) {
       const count = Math.ceil(len / 45);
-      for (let i=0;i<count;i++) this.box({x:a.x+(b.x-a.x)*i/count,y:a.y+(b.y-a.y)*i/count}, {x:a.x+(b.x-a.x)*(i+1)/count,y:a.y+(b.y-a.y)*(i+1)/count}, thickness, low, high, color);
+      for (let i=0;i<count;i++) this.box({x:a.x+(b.x-a.x)*i/count,y:a.y+(b.y-a.y)*i/count}, {x:a.x+(b.x-a.x)*(i+1)/count,y:a.y+(b.y-a.y)*(i+1)/count}, thickness, low, high, color, hideEndFaces);
       return;
     }
     const nx = -(b.y-a.y)/len*thickness/2, ny = (b.x-a.x)/len*thickness/2;
     const xy = [[a.x+nx,a.y+ny],[b.x+nx,b.y+ny],[b.x-nx,b.y-ny],[a.x-nx,a.y-ny]];
     const bottom = xy.map(([x,y]) => [x,y,low]), top = xy.map(([x,y]) => [x,y,high]);
     this.faces.push({p:top,color,light:1.06});
-    for (let i=0;i<4;i++) { const j=(i+1)%4; this.faces.push({p:[bottom[i],bottom[j],top[j],top[i]],color,light:[.84,.72,.94,.78][i]}); }
+    for (let i=0;i<4;i++) {
+      // i=1 and i=3 are the short end faces. CAD walls are assembled from
+      // many consecutive pieces; drawing every cap creates false white
+      // brackets and boxes at otherwise continuous wall junctions.
+      if (hideEndFaces && (i === 1 || i === 3)) continue;
+      const j=(i+1)%4;
+      this.faces.push({p:[bottom[i],bottom[j],top[j],top[i]],color,light:[.84,.72,.94,.78][i]});
+    }
+  }
+  prism(points,low,high,color){
+    if(!Array.isArray(points)||points.length<3||high<=low)return;
+    const bottom=points.map(point=>[point.x,point.y,low]),top=points.map(point=>[point.x,point.y,high]);
+    this.faces.push({p:top,color,light:1.06});
+    for(let i=0;i<points.length;i++){
+      const j=(i+1)%points.length;
+      this.faces.push({p:[bottom[i],bottom[j],top[j],top[i]],color,light:[.84,.72,.94,.78][i%4]});
+    }
   }
   project([x,y,z]) {
     const r=this.rotation*Math.PI/180, t=this.tilt*Math.PI/180;
@@ -156,7 +235,8 @@ class Plan25D {
     const ox=w/2-(minX+maxX)/2*scale+this.pan.x, oy=h/2+20-(minY+maxY)/2*scale+this.pan.y;
     const screen=p=>{const q=this.project(p);return {x:ox+q.x*scale,y:oy+q.y*scale};};
     const path=points=>{ctx.beginPath();points.map(screen).forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();};
-    path(floor);ctx.shadowColor='#263c4d40';ctx.shadowBlur=25;ctx.shadowOffsetY=14;ctx.fillStyle='#e1e6e3';ctx.fill();ctx.shadowBlur=0;ctx.shadowOffsetY=0;
+    // The source drawing does not contain a verified floor contour. Do not
+    // present the model bounds as an invented slab under the detected walls.
     if(this.showSource && this.image?.complete && this.image.naturalWidth) {
       ctx.save();path(floor);ctx.clip();
       const p0=screen([0,0,0]),px=screen([this.floorPlan.width,0,0]),py=screen([0,this.floorPlan.height,0]);

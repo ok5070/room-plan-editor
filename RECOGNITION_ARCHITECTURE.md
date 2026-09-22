@@ -1,6 +1,6 @@
 # Архитектура распознавания 0.1
 
-Статус: утверждённая стратегия версии 0.1.
+Статус: frozen for implementation.
 
 Документ развивает `PRODUCT_ARCHITECTURE.md` и `DATA_CONTRACT.md`. Он определяет,
 как CAD, PDF, OCR, компьютерное зрение и VLM формируют проверяемые предложения,
@@ -196,7 +196,8 @@ RecognitionRun ссылается на ID и хэш использованной
   "algorithm": "cad-architecture-recognizer",
   "algorithm_version": "0.4",
   "base_model_version": 18,
-  "status": "completed",
+  "execution_status": "completed",
+  "acceptance_status": "pending",
   "effective_ai_processing_policy": {},
   "started_at": "...",
   "finished_at": "...",
@@ -205,17 +206,27 @@ RecognitionRun ссылается на ID и хэш использованной
 }
 ```
 
-Статусы:
+Статусы выполнения:
 
 ```text
 pending
 processing
 completed
+failed
+```
+
+Статусы принятия:
+
+```text
+pending
 partially_accepted
 accepted
 rejected
-failed
 ```
+
+Успешный запуск без Proposal имеет `execution_status = completed`,
+`acceptance_status = accepted` и `proposal_count = 0`. Он не считается ошибкой и
+не изменяет WorkingModel.
 
 RecognitionRun владеет результатами запуска, но ссылается на SheetSource и
 CoordinateTransform вместо их дублирования.
@@ -441,6 +452,7 @@ Proposal формируется контролируемыми и версион
   "target_entity_type": "door",
   "target_id": null,
   "target_content_hash": null,
+  "geometry_fingerprint": "sha256:...",
   "candidate": {
     "geometry": {},
     "properties": {
@@ -494,6 +506,11 @@ conflict
 superseded
 ```
 
+Pending Proposal получает `superseded`, только если новый принятый Proposal
+имеет тот же `source_file_id`, относится к тому же `target_id` либо имеет тот же
+геометрический fingerprint для create и подтверждённо противоречит старому.
+Сам факт нового запуска не изменяет статус старого Proposal.
+
 ## 14. Двери и проёмы
 
 | Наблюдения | candidate_type |
@@ -539,6 +556,10 @@ superseded
   }
 }
 ```
+
+`changes` использует dot-path. Путь к листовому значению заменяет только это
+значение. Если путь указывает на объект, объект заменяется целиком и не сливается
+рекурсивно. Полный JSON Patch в версии 0.1 не используется.
 
 Решения:
 
@@ -794,6 +815,9 @@ VLM не является обязательной для прохождения
 8. Candidate не является сущностью WorkingModel.
 9. ProposalDecision отделён от Evidence fusion.
 10. Принятие Proposal проверяет model_version и target hash.
+11. Служебные границы, рамки, торцы проёмов и другие вспомогательные построения
+    остаются только в Observation/Evidence и никогда не добавляются как стены,
+    перегородки или иные объекты WorkingModel.
 11. Ручные изменения имеют приоритет.
 12. Verification относится к принятому состоянию объекта.
 13. ProjectDictionary действует только внутри scope.

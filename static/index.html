@@ -13,9 +13,10 @@
     <script src="https://pixijs.download/release/pixi.min.js" defer></script>
     <script src="/static/door-mount.js" defer></script>
     <script src="/static/door-template.js" defer></script>
-    <script src="/static/plan-25d.js" defer></script>
+    <script src="/static/plan-25d.js?v=10" defer></script>
+    <script src="/static/centerline-pairs.js?v=10" defer></script>
     <script src="/static/door-editor.js" defer></script>
-    <script src="/static/app-v2.js?v=3" defer></script>
+    <script src="/static/app-v2.js?v=16" defer></script>
   </head>
   <body>
     <section class="cover" id="cover" aria-labelledby="cover-title">
@@ -72,7 +73,10 @@
             <ul id="project-files"></ul>
             <p class="editor-help">Файлы хранятся локально внутри проекта. DWG/DXF автоматически превращаются в редактируемые стены и двери; PDF и изображения сохраняются как исходники.</p>
             <div id="cad-layout-picker" hidden>
-              <label for="cad-layout-select">Листы проекта</label>
+              <div class="cad-layout-heading">
+                <label for="cad-layout-select">Листы проекта</label>
+                <button id="cad-layout-toggle" class="cad-layout-toggle" type="button" aria-controls="cad-layout-gallery" aria-expanded="true">Свернуть</button>
+              </div>
               <div id="cad-layout-gallery" class="cad-layout-gallery"></div>
               <select id="cad-layout-select"></select>
               <button id="cad-layout-apply" class="save-geometry" type="button" disabled>Выбрать страницу</button>
@@ -138,9 +142,9 @@
           </section>
 
           <section class="sidebar__section system-block" id="skud-equipment-section">
-            <div class="section-heading"><p class="section-label">СКУД и домофония</p><span id="equipment-status">0 размещено</span></div>
-            <p class="editor-help">Выберите прибор, затем укажите место на плане. Дверные устройства устанавливаются рядом с существующей дверью.</p>
-            <div class="equipment-palette" role="toolbar" aria-label="Оборудование СКУД и домофонии">
+            <div class="section-heading"><p class="section-label">Инженерные системы</p><span id="equipment-status">0 размещено</span></div>
+            <p class="editor-help">Один план может содержать СКУД, домофонию, СОТ и СКС. Выберите прибор нужной системы и укажите место на плане.</p>
+            <div class="equipment-palette" role="toolbar" aria-label="Оборудование инженерных систем">
               <button class="equipment-tool" data-equipment-type="access_point"><b>ТД</b><span>Точка доступа</span></button>
               <button class="equipment-tool" data-equipment-type="controller"><b>AR</b><span>Контроллер</span></button>
               <button class="equipment-tool" data-equipment-type="reader"><b>YK</b><span>Считыватель</span></button>
@@ -154,6 +158,12 @@
               <button class="equipment-tool" data-equipment-type="junction_box"><b>КС</b><span>Соед. коробка</span></button>
               <button class="equipment-tool equipment-tool--intercom" data-equipment-type="intercom_panel"><b>ДП</b><span>Панель домофона</span></button>
               <button class="equipment-tool equipment-tool--intercom" data-equipment-type="intercom_monitor"><b>ВМ</b><span>Монитор домофона</span></button>
+              <button class="equipment-tool equipment-tool--alarm" data-equipment-type="camera"><b>КМ</b><span>Камера СОТ</span></button>
+              <button class="equipment-tool" data-equipment-type="data_outlet"><b>RJ</b><span>Розетка СКС</span></button>
+              <button class="equipment-tool" data-equipment-type="wifi_access_point"><b>Wi</b><span>Точка Wi‑Fi</span></button>
+              <button class="equipment-tool" data-equipment-type="network_switch"><b>SW</b><span>Коммутатор</span></button>
+              <button class="equipment-tool" data-equipment-type="patch_panel"><b>PP</b><span>Патч-панель</span></button>
+              <button class="equipment-tool" data-equipment-type="rack"><b>ШТ</b><span>Шкаф СКС</span></button>
             </div>
             <button class="save-geometry" id="save-equipment" type="button" disabled>Сохранить оборудование</button>
             <p class="editor-help">Кабельные трассы и материалы добавим следующим самостоятельным инструментом.</p>
@@ -171,7 +181,7 @@
             <div class="angle-presets"><button id="tilt-minus">−5°</button><button id="tilt-plus">+5°</button></div>
             <label class="editor-option">Поворот <output id="rotation-value">0°</output></label>
             <input class="view-range" id="view-rotation" aria-label="Поворот плана" type="range" min="0" max="360" value="0">
-            <label class="editor-option"><span>Показывать подложку PDF</span><input type="checkbox" id="view-source"></label>
+            <label class="editor-option"><span>Показывать PDF/изображение</span><input type="checkbox" id="view-source"></label>
             <p class="editor-help">Мышь — вращение; Shift + перетаскивание — сдвиг; колесо — масштаб. Двойной щелчок — весь план.</p>
             <p class="editor-help" id="view-25d-info"></p>
             <p class="editor-help">Высоты условные. Иллюстративная визуализация. Не для монтажа.</p>
@@ -191,21 +201,43 @@
           <section class="audit-card" id="audit-card" aria-live="polite" hidden>
             <div class="audit-card__head"><p class="section-label">АУДИТ CAD</p><span class="status-badge" id="audit-status">не загружен</span></div>
             <p class="audit-card__source" id="audit-source">—</p>
-            <dl><dt>Масштаб k</dt><dd id="audit-k">—</dd><dt>Стены</dt><dd id="audit-walls">—</dd><dt>Помещения</dt><dd id="audit-rooms">—</dd><dt>Двери / окна</dt><dd id="audit-openings">—</dd><dt>Устройства</dt><dd id="audit-devices">—</dd></dl>
-            <div class="audit-actions" id="audit-actions" hidden><button id="audit-commit-btn" type="button">Принять геометрию</button><button id="audit-dismiss-btn" type="button">Отклонить</button></div>
+            <dl><dt>Масштаб k</dt><dd id="audit-k">—</dd><dt>Стены</dt><dd id="audit-walls">—</dd><dt>Пары → ось стены</dt><dd id="audit-merged-pairs">0</dd><dt>Составные контуры → ось</dt><dd id="audit-compound-groups">0</dd><dt>Проёмы по разрывам</dt><dd id="audit-gap-openings">0</dd><dt>Тонкие пары · проверить</dt><dd id="audit-pair-candidates">0</dd><dt>Помещения</dt><dd id="audit-rooms">—</dd><dt>Двери / окна</dt><dd id="audit-openings">—</dd><dt>Устройства</dt><dd id="audit-devices">—</dd></dl>
+            <p class="editor-help">Оранжевый — предполагаемая стена; жёлтый — тонкая пара контуров, которую ещё нужно проверить; бирюзовый — перегородка из явно названного CAD-слоя. Только однозначные пары превращаются в одну ось стены; жёлтые линии пока сохраняются как стены.</p>
+            <div class="audit-actions" id="audit-actions" hidden>
+              <label class="card-field">Предложение<select id="audit-proposal-select"></select></label>
+              <button id="audit-commit-btn" type="button">Принять выбранное</button>
+              <button id="audit-dismiss-btn" type="button">Отклонить выбранное</button>
+            </div>
           </section>
         </aside>
 
         <section class="plan-panel" aria-label="Интерактивный план этажа">
           <div class="plan-panel__head">
             <div><p class="section-label">План 01</p><h2 id="floor-plan-title">План этажа</h2></div>
-            <div class="view-switch" aria-label="Режим плана"><button id="view-2d" aria-pressed="true">План 2D</button><button id="view-25d" aria-pressed="false">Объём 2.5D</button></div>
+            <div class="view-switch" aria-label="Режим плана">
+              <button id="view-source-only" aria-pressed="false">Подложка</button>
+              <button id="view-2d" aria-pressed="true">План 2D</button>
+              <button id="view-25d" aria-pressed="false">Объём 2.5D</button>
+            </div>
             <div class="plan-panel__meta"><span id="source-label">Демонстрационная схема</span><span id="zoom-label">100%</span></div>
           </div>
           <div id="floor-plan-container">
             <canvas id="plan-25d" hidden aria-label="Объёмный вид сохранённого плана"></canvas>
             <div class="loading" id="loading"><span></span><p>Подготавливаем план…</p></div>
             <div class="editor-hint" id="editor-hint" aria-live="polite">Режим просмотра</div>
+            <div class="door-recognition-toolbar" id="door-recognition-toolbar" hidden>
+              <label>Тип двери
+                <select id="door-sample-type">
+                  <option value="1">Одностворчатая</option>
+                  <option value="2">Двустворчатая</option>
+                </select>
+              </label>
+              <button id="door-train-sample" type="button">Обучить по образцу</button>
+              <button id="door-add-manual" type="button">Добавить дверь вручную</button>
+              <button id="door-accept-candidates" type="button" hidden>Принять найденные</button>
+              <button id="door-reject-candidates" type="button" hidden>Отклонить</button>
+              <span id="door-candidate-count" aria-live="polite"></span>
+            </div>
             <div class="canvas-controls" aria-label="Управление масштабом">
               <button type="button" id="zoom-in" aria-label="Приблизить">+</button>
               <button type="button" id="zoom-out" aria-label="Отдалить">−</button>

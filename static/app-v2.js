@@ -1,12 +1,14 @@
 const state = {
   app: null, world: null, project: null, cadAreas: [],
   geometry: { version: 2, canvas: {}, walls: [], doors: [], windows: [] },
-  equipment: [], markers: [], equipmentLayer: null, cadPreview: null, cadLayer: null, geometryLayer: null, stagingLayer: null, draftLayer: null, backgroundSprite: null,
+  equipment: [], markers: [], equipmentLayer: null, cadPreview: null, cadPreviewMaster: null, cadLayer: null, gridLayer: null, geometryLayer: null, stagingLayer: null, recognitionLayer: null, draftLayer: null, backgroundSprite: null,
   scale: 1, minScale: 0.12, maxScale: 6,
   dragging: false, dragStart: null, worldStart: null,
   editorEnabled: false, tool: "select", draftStart: null, selected: null, moving: null,
-  history: [], future: [], dirty: false, equipmentDirty: false,
-  viewMode: '2d', volume: null, stagingGeometry: null, audit: null,
+  history: [], future: [], dirty: false, equipmentDirty: false, savedGeometry: null, savedEquipment: null,
+  viewMode: '2d', volume: null, stagingGeometry: null, audit: null, cadAppliedLayout: null, cadLayoutsCollapsed: false,
+  modelVersion: 0, doorSampleMode: false, doorSampleStart: null, doorSampleCurrent: null,
+  doorDetectionRun: null, doorCandidates: [], manualDoorLeafCount: 1,
   projectId: new URLSearchParams(location.search).get('project') || 'initial',
 };
 
@@ -26,8 +28,15 @@ const equipmentCatalog = {
   junction_box:{name:'Соединительная коробка',prefix:'КС',symbol:'КС',color:0x687a80,mount:'wall',height:2200},
   intercom_panel:{name:'Вызывная панель домофона',prefix:'ДП',symbol:'ДП',color:0x7557b7,mount:'wall',height:1500},
   intercom_monitor:{name:'Монитор домофона',prefix:'ВМ',symbol:'ВМ',color:0x7557b7,mount:'wall',height:1500},
+  camera:{name:'Камера видеонаблюдения',prefix:'КМ',symbol:'КМ',color:0xb14d68,mount:'wall',height:3000,system:'СОТ'},
+  data_outlet:{name:'Информационная розетка',prefix:'ИР',symbol:'RJ',color:0x3976a8,mount:'wall',height:300,system:'СКС'},
+  wifi_access_point:{name:'Точка Wi‑Fi',prefix:'AP',symbol:'Wi',color:0x3976a8,mount:'ceiling',height:2800,system:'СКС'},
+  network_switch:{name:'Сетевой коммутатор',prefix:'SW',symbol:'SW',color:0x3976a8,mount:'cabinet',height:1200,system:'СКС'},
+  patch_panel:{name:'Патч-панель',prefix:'PP',symbol:'PP',color:0x3976a8,mount:'cabinet',height:1200,system:'СКС'},
+  rack:{name:'Телекоммуникационный шкаф',prefix:'ШТ',symbol:'ШТ',color:0x52636d,mount:'free',height:0,system:'СКС'},
 };
-const layerNames = {cad:'CAD-подложка', wall:'Стены', partition:'Перегородки', door:'Двери', window:'Окна', background:'PDF/изображение', controller:'Оборудование'};
+const systemLabels={skud_intercom:'СКУД / домофония',cctv:'СОТ',sks:'СКС',architecture:'Архитектура'};
+const layerNames = {cad:'CAD-подложка', wall:'Стены', partition:'Перегородки', door:'Двери / проёмы', window:'Окна', background:'PDF/изображение', controller:'Оборудование'};
 const layers = Object.fromEntries(Object.keys(layerNames).map(k => [k,{visible:true,locked:k==='background'||k==='cad'}]));
 function editable(layer) { return layers[layer].visible && !layers[layer].locked; }
 function selectedEditable() {
@@ -54,6 +63,11 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 }
 
+function doorReviewSummary(doors = []) {
+  const pending = doors.filter((door) => door.swing === 'unknown').length;
+  return { total: doors.length, pending, confirmed: doors.length - pending };
+}
+
 async function loadJson(url, errorMessage) {
   const response = await fetch(url);
   if (!response.ok) throw new Error(errorMessage);
@@ -65,14 +79,17 @@ async function loadProject() {
   $('#project-list').innerHTML = projects.map(p=>`<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('');
   const record = await loadJson(`/api/projects/${encodeURIComponent(state.projectId)}`, 'Не удалось загрузить проект');
   state.project = record.project; state.geometry = record.geometry;
-  state.cadPreview = record.cadPreview || null; state.cadAreas = record.cadAreas || [];
+  state.modelVersion = Number(record.model_version) || 0;
+  state.cadPreview = record.cadPreview || null; state.cadPreviewMaster = record.cadPreviewMaster || record.cadPreview || null; state.cadAreas = record.cadAreas || [];
   $('#project-list').value=state.projectId;
   renderProjectFiles(record.files);
-  renderCadLayouts(record.cadLayouts, record.cadSelectedLayout);
+  state.cadAppliedLayout=record.cadAppliedLayout||null;
+  renderCadLayouts(record.cadLayouts, record.cadSelectedLayout, state.cadAppliedLayout);
   state.geometry.windows ||= [];
   state.geometry.doors.forEach((door) => { door.leafCount = door.leafCount === 2 ? 2 : 1; door.readerCount = door.readerCount === 2 ? 2 : 1; door.accessPointCode ||= null; });
   state.equipment = state.project.equipment || [];
   state.equipment=state.equipment.map(item=>({...item,code:item.code||item.id,mount:item.mount||'free',mountingHeight:item.mountingHeight??1200,status:item.status==='confirmed'?'confirmed':'proposed',...(item.type==='controller'?{formFactor:item.formFactor||'wall_enclosure',controllerDoorCapacity:item.controllerDoorCapacity||4,controllerReaderCapacity:item.controllerReaderCapacity||8,servedDoorIds:item.servedDoorIds||[]}:{})}));
+  state.savedGeometry=clone(state.geometry); state.savedEquipment=clone(state.equipment);
   setEquipmentDirty(false);
   const { project } = state.project;
   $("#cover-object").textContent = project.object;
@@ -82,16 +99,71 @@ async function loadProject() {
   $("#revision").textContent = project.revision;
   $('#floor-plan-title').textContent=state.project.floorPlan.name || 'План этажа';
   $("#source-label").textContent = state.cadPreview ? 'CAD-подложка · '+state.cadPreview.layers.length+' слоёв' : state.project.floorPlan.backgroundImage ? 'Проектная подложка' : 'Без подложки';
+  updateSourceViewAvailability();
+  await loadLatestDoorDetection();
+}
+
+async function loadLatestDoorDetection() {
+  try {
+    const result = await loadJson(`/api/projects/${encodeURIComponent(state.projectId)}/door-detection-runs/latest`, 'Не удалось загрузить результаты поиска дверей');
+    state.modelVersion = Number(result.model_version) || state.modelVersion;
+    setDoorDetectionRun(result.run?.status === 'pending' ? result.run : null);
+  } catch (error) {
+    setDoorDetectionRun(null);
+  }
+}
+
+function setDoorDetectionRun(run) {
+  state.doorDetectionRun = run;
+  state.doorCandidates = run?.candidates || [];
+  const count = state.doorCandidates.length;
+  $('#door-accept-candidates').hidden = !count;
+  $('#door-reject-candidates').hidden = !count;
+  $('#door-candidate-count').textContent = count ? `Найдено: ${count}` : '';
+  drawDoorRecognition();
+}
+
+function hasSourceUnderlay() {
+  return Boolean(state.cadPreview || state.project?.floorPlan?.backgroundImage);
+}
+
+function updateSourceViewAvailability() {
+  const button = $('#view-source-only');
+  if (!button) return;
+  button.disabled = !hasSourceUnderlay();
+  button.title = button.disabled ? 'В проекте пока нет CAD, PDF или изображения' : 'Показать только исходную подложку';
+}
+
+function syncPlanLayerVisibility() {
+  const sourceOnly = state.viewMode === 'source';
+  if (state.backgroundSprite) state.backgroundSprite.visible = sourceOnly || layers.background.visible;
+  if (state.cadLayer) state.cadLayer.visible = sourceOnly || layers.cad.visible;
+  if (state.gridLayer) state.gridLayer.visible = !sourceOnly;
+  if (state.geometryLayer) state.geometryLayer.visible = !sourceOnly;
+  if (state.equipmentLayer) state.equipmentLayer.visible = !sourceOnly;
+  if (state.draftLayer) state.draftLayer.visible = !sourceOnly;
+  if (state.stagingLayer) state.stagingLayer.visible = !sourceOnly;
+  if (state.recognitionLayer) state.recognitionLayer.visible = state.viewMode !== '25d';
 }
 
 function renderProjectFiles(files) {
   $('#project-files').innerHTML=files.length ? files.map(f=>`<li><a href="${escapeHtml(f.url)}" download>${escapeHtml(f.name)}</a></li>`).join('') : '<li>Файлы пока не загружены</li>';
 }
 
-function renderCadLayouts(layouts, selected) {
+function cadLayoutStorageKey() { return `room-plan:cad-layouts-collapsed:${state.projectId}`; }
+function setCadLayoutsCollapsed(collapsed, persist = true) {
+  state.cadLayoutsCollapsed=Boolean(collapsed);
+  const gallery=$('#cad-layout-gallery'),button=$('#cad-layout-toggle');
+  if(gallery)gallery.hidden=state.cadLayoutsCollapsed;
+  if(button){button.setAttribute('aria-expanded',String(!state.cadLayoutsCollapsed));button.textContent=state.cadLayoutsCollapsed?'Развернуть':'Свернуть';}
+  if(persist&&typeof localStorage!=='undefined')localStorage.setItem(cadLayoutStorageKey(),state.cadLayoutsCollapsed?'1':'0');
+}
+
+function renderCadLayouts(layouts, selected, applied = state.cadAppliedLayout) {
   const picker=$('#cad-layout-picker'), select=$('#cad-layout-select');
   if(!picker||!select) return;
   const names=Array.isArray(layouts)?layouts:[];
+  state.cadSelectedLayout=selected||null; state.cadPendingLayout=selected||null;
   picker.hidden=names.length===0;
   const gallery=$('#cad-layout-gallery');
   gallery.innerHTML=names.map(name=>`<button type="button" class="cad-layout-card" data-cad-layout="${escapeHtml(name)}"><canvas width="220" height="130"></canvas><span>${escapeHtml(name)}</span></button>`).join('');
@@ -99,11 +171,13 @@ function renderCadLayouts(layouts, selected) {
   if(selected&&names.includes(selected)) select.value=selected; else select.value='';
   gallery.querySelectorAll('[data-cad-layout]').forEach(card=>card.classList.toggle('is-selected',card.dataset.cadLayout===selected));
   gallery.querySelectorAll('canvas').forEach(canvas=>drawCadThumbnail(canvas, canvas.closest('[data-cad-layout]')?.dataset.cadLayout));
-  $('#cad-layout-apply').disabled=!selected;
+  $('#cad-layout-apply').disabled=!selected || state.cadPendingLayout===applied;
+  const saved=typeof localStorage!=='undefined'?localStorage.getItem(cadLayoutStorageKey()):null;
+  setCadLayoutsCollapsed(saved===null?state.cadLayoutsCollapsed:saved==='1',false);
 }
 
 function drawCadThumbnail(canvas, areaName) {
-  const preview=state.cadPreview, ctx=canvas.getContext('2d');
+  const preview=state.cadPreviewMaster||state.cadPreview, ctx=canvas.getContext('2d');
   ctx.clearRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#e9eeeb'; ctx.fillRect(0,0,canvas.width,canvas.height);
   if(!preview?.paths?.length) return;
   const area=state.cadAreas?.find(item=>item.name===areaName);
@@ -164,6 +238,7 @@ async function drawPlan() {
   for (let x = 0; x <= floorPlan.width; x += 50) grid.moveTo(x, 0).lineTo(x, floorPlan.height);
   for (let y = 0; y <= floorPlan.height; y += 50) grid.moveTo(0, y).lineTo(floorPlan.width, y);
   grid.stroke({ width: 1, color: 0x527176, alpha: 0.08 });
+  state.gridLayer = grid;
   state.world.addChild(grid);
   state.geometryLayer = new PIXI.Container();
   state.equipmentLayer = new PIXI.Container();
@@ -171,9 +246,13 @@ async function drawPlan() {
   state.world.addChild(state.geometryLayer, state.equipmentLayer, state.draftLayer);
   state.stagingLayer = new PIXI.Container();
   state.world.addChild(state.stagingLayer);
+  state.recognitionLayer = new PIXI.Container();
+  state.world.addChild(state.recognitionLayer);
   drawGeometry();
   drawEquipment();
   drawStagingGeometry();
+  drawDoorRecognition();
+  syncPlanLayerVisibility();
   updateVisibleCount();
 }
 
@@ -210,6 +289,8 @@ function drawCadPreview() {
   state.world.addChild(state.cadLayer);
 }
 
+function visualWallStrokeWidth(wall) { return Math.max(1.5, Math.min(4, (Number(wall.thickness) || 13) / 4)); }
+
 function drawGeometry() {
   if (!state.geometryLayer) return;
   state.geometryLayer.removeChildren();
@@ -217,7 +298,7 @@ function drawGeometry() {
     if (!layers[wall.type].visible) return;
     const selected = state.selected?.kind === "wall" && state.selected.id === wall.id;
     const g = new PIXI.Graphics();
-    g.moveTo(wall.x1, wall.y1).lineTo(wall.x2, wall.y2).stroke({ width: wall.thickness, color: selected ? 0xf4bd5c : wall.type === "partition" ? 0x169b91 : 0x243c63, alpha: 0.96 });
+    g.moveTo(wall.x1, wall.y1).lineTo(wall.x2, wall.y2).stroke({ width: visualWallStrokeWidth(wall), color: selected ? 0xf4bd5c : wall.type === "partition" ? 0x169b91 : 0x243c63, alpha: 0.96 });
     if (selected) {
       g.circle(wall.x1, wall.y1, 9).fill({ color: 0xf4bd5c }).stroke({ width: 2, color: 0xffffff });
       g.circle(wall.x2, wall.y2, 9).fill({ color: 0xf4bd5c }).stroke({ width: 2, color: 0xffffff });
@@ -235,7 +316,9 @@ function drawGeometry() {
     const half = door.width / 2;
     g.moveTo(-half, 0).lineTo(half, 0).stroke({ width: 18, color: 0xf4f5f3, alpha: 0.96 });
     const doorColor = selected ? 0xf4bd5c : 0x176f9f;
-    if (door.leafCount === 2) {
+    if (door.swing === 'unknown') {
+      g.moveTo(-half, -7).lineTo(-half, 7).moveTo(half, -7).lineTo(half, 7).stroke({ width: 3, color: doorColor });
+    } else if (door.leafCount === 2) {
       const leaf = door.width * 0.46;
       g.moveTo(-half, 0).lineTo(-half, -leaf).stroke({ width: 4, color: doorColor });
       g.moveTo(half, 0).lineTo(half, -leaf).stroke({ width: 4, color: doorColor });
@@ -270,8 +353,8 @@ function drawGeometry() {
   });
   updateVisibleCount();
   updateEditorButtons();
-  if (state.backgroundSprite) state.backgroundSprite.visible=layers.background.visible;
-  if (state.cadLayer) state.cadLayer.visible=layers.cad.visible;
+  if (state.backgroundSprite) state.backgroundSprite.visible=state.viewMode === 'source' || layers.background.visible;
+  if (state.cadLayer) state.cadLayer.visible=state.viewMode === 'source' || layers.cad.visible;
   state.markers.forEach(marker=>{marker.visible=layers.controller.visible;});
 }
 
@@ -281,8 +364,8 @@ function drawStagingGeometry() {
   if (!state.stagingGeometry) return;
   state.stagingGeometry.walls.forEach((wall) => {
     const g = new PIXI.Graphics();
-    const color = wall.type === 'partition' ? 0x38dbd0 : 0xff9f43;
-    g.moveTo(wall.x1, wall.y1).lineTo(wall.x2, wall.y2).stroke({ width: Math.max(3, wall.thickness), color, alpha: 0.78, cap: 'round' });
+    const color = wall.type === 'partition' ? 0x38dbd0 : wall.reviewHint === 'thin_parallel_pair' ? 0xf4d06f : 0xff9f43;
+    g.moveTo(wall.x1, wall.y1).lineTo(wall.x2, wall.y2).stroke({ width: visualWallStrokeWidth(wall), color, alpha: 0.78, cap: 'round' });
     state.stagingLayer.addChild(g);
   });
   state.stagingGeometry.doors.forEach((door) => {
@@ -298,6 +381,26 @@ function drawStagingGeometry() {
     g.moveTo(-half, -7).lineTo(half, -7).moveTo(-half, 7).lineTo(half, 7).stroke({ width: 5, color: 0x8ce8ff, alpha: 0.95 });
     holder.addChild(g); state.stagingLayer.addChild(holder);
   });
+}
+
+function drawDoorRecognition() {
+  if (!state.recognitionLayer) return;
+  state.recognitionLayer.removeChildren();
+  state.doorCandidates.forEach(candidate => {
+    const holder = new PIXI.Container();
+    holder.position.set(candidate.x, candidate.y); holder.rotation = candidate.rotation || 0;
+    const g = new PIXI.Graphics(), half = candidate.width / 2;
+    g.moveTo(-half, -10).lineTo(-half, 10).moveTo(half, -10).lineTo(half, 10).stroke({width:4,color:0xd84ed8,alpha:.95});
+    g.moveTo(-half, 0).lineTo(half, 0).stroke({width:2,color:0xd84ed8,alpha:.72});
+    g.circle(0,0,4).fill({color:0xd84ed8}).stroke({width:1,color:0xffffff});
+    holder.addChild(g); state.recognitionLayer.addChild(holder);
+  });
+  if (state.doorSampleStart && state.doorSampleCurrent) {
+    const minX=Math.min(state.doorSampleStart.x,state.doorSampleCurrent.x),minY=Math.min(state.doorSampleStart.y,state.doorSampleCurrent.y);
+    const width=Math.abs(state.doorSampleCurrent.x-state.doorSampleStart.x),height=Math.abs(state.doorSampleCurrent.y-state.doorSampleStart.y);
+    const frame=new PIXI.Graphics().rect(minX,minY,width,height).fill({color:0x42d1c5,alpha:.08}).stroke({width:3,color:0x42d1c5,alpha:.95});
+    state.recognitionLayer.addChild(frame);
+  }
 }
 
 function createMarker(item) {
@@ -395,7 +498,7 @@ function nearestElement(point) {
 function updateAuditCard(payload, status = 'staging') {
   const metadata = payload?.metadata || {};
   const counts = state.audit?.counts && status !== 'staging' ? state.audit.counts : { walls: payload.walls?.length || 0, rooms: payload.rooms?.length || 0, doors: payload.doors?.length || 0, windows: payload.windows?.length || 0, devices: payload.devices?.length || 0 };
-  state.audit = { source: metadata.source || state.audit?.source || 'geometry.v2', k: metadata.k ?? state.audit?.k ?? '—', counts, status };
+  state.audit = { source: metadata.source || state.audit?.source || 'geometry.v2', k: metadata.k ?? state.audit?.k ?? '—', mergedPairs: metadata.wall_detection?.centerline_merged_pairs ?? state.audit?.mergedPairs ?? 0, compoundGroups: metadata.wall_detection?.centerline_compound_groups ?? state.audit?.compoundGroups ?? 0, gapOpenings: metadata.wall_detection?.recognized_opening_gaps ?? state.audit?.gapOpenings ?? 0, pairCandidates: metadata.wall_detection?.thin_parallel_pair_candidates ?? metadata.pairCandidates ?? state.audit?.pairCandidates ?? 0, counts, status };
   $('#audit-card').hidden = false;
   const labels = { staging: 'STAGING · НЕ СОХРАНЕНО', confirmed: 'ПОДТВЕРЖДЕНО · НЕ СОХРАНЕНО', saved: 'СОХРАНЕНО В ПРОЕКТ', rejected: 'ОТКЛОНЕНО · ПРОЕКТ БЕЗ ИЗМЕНЕНИЙ' };
   $('#audit-status').textContent = labels[status] || status;
@@ -403,6 +506,10 @@ function updateAuditCard(payload, status = 'staging') {
   $('#audit-source').textContent = state.audit.source;
   $('#audit-k').textContent = state.audit.k;
   $('#audit-walls').textContent = String(counts.walls);
+  $('#audit-merged-pairs').textContent = String(state.audit.mergedPairs);
+  $('#audit-compound-groups').textContent = String(state.audit.compoundGroups);
+  $('#audit-gap-openings').textContent = String(state.audit.gapOpenings);
+  $('#audit-pair-candidates').textContent = String(state.audit.pairCandidates);
   $('#audit-rooms').textContent = String(counts.rooms);
   $('#audit-openings').textContent = `${counts.doors} / ${counts.windows}`;
   $('#audit-devices').textContent = String(counts.devices);
@@ -416,11 +523,16 @@ function normalizeImportedGeometry(payload) {
     const values = [wall.x1, wall.y1, wall.x2, wall.y2].map(Number);
     if (values.some((value) => !Number.isFinite(value))) throw new Error(`Некорректные координаты стены ${index + 1}`);
     const start = transform.point(values[0], values[1]), end = transform.point(values[2], values[3]);
-    return { id: String(wall.id || `W-IMP-${String(index + 1).padStart(4, '0')}`), type: wall.type === 'partition' ? 'partition' : 'wall', x1: start.x, y1: start.y, x2: end.x, y2: end.y, thickness: Math.max(2, Math.min(Number(wall.thickness) || 13, 80)) };
+    const k = Number(payload.metadata?.k);
+    const gapMm = Number(wall.pairedGapMm);
+    const physicalThickness = wall.source === 'cad_face_pair_centerline' && Number.isFinite(k) && k > 0 && gapMm > 0
+      ? gapMm / (k * 1000) * transform.scale : Number(wall.thickness) || 13;
+    return { id: String(wall.id || `W-IMP-${String(index + 1).padStart(4, '0')}`), type: wall.type === 'partition' ? 'partition' : 'wall', x1: start.x, y1: start.y, x2: end.x, y2: end.y, thickness: Math.max(2, Math.min(physicalThickness, 80)), ...(wall.reviewHint === 'thin_parallel_pair' ? { reviewHint: 'thin_parallel_pair', pairedGapMm: Number(wall.pairedGapMm) || 0 } : {}) };
   });
   const normalizeAttached = (items, kind) => (Array.isArray(items) ? items : []).map((item, index) => {
     const point = transform.point(Number(item.x), Number(item.y));
-    return { ...item, id: String(item.id || `${kind.toUpperCase()}-IMP-${String(index + 1).padStart(4, '0')}`), x: point.x, y: point.y, rotation: transform.flipY ? -(Number(item.rotation) || 0) : Number(item.rotation) || 0, wallId: String(item.wallId || '') };
+    const width = Number(item.width);
+    return { ...item, id: String(item.id || `${kind.toUpperCase()}-IMP-${String(index + 1).padStart(4, '0')}`), x: point.x, y: point.y, ...(Number.isFinite(width) ? {width: width * transform.scale} : {}), rotation: transform.flipY ? -(Number(item.rotation) || 0) : Number(item.rotation) || 0, wallId: String(item.wallId || '') };
   });
   return { version: 2, canvas: { width: state.project.floorPlan.width, height: state.project.floorPlan.height }, walls, doors: normalizeAttached(payload.doors, 'door'), windows: normalizeAttached(payload.windows, 'window') };
 }
@@ -431,7 +543,7 @@ function importedGeometryTransform(payload) {
   if (!sourceCoordinates) {
     const origin = metadata.origin || {};
     const ox = Number(origin.x) || 0, oy = Number(origin.y) || 0;
-    return { point: (x, y) => ({ x: x - ox, y: y - oy }), flipY: false, mode: 'identity' };
+    return { point: (x, y) => ({ x: x - ox, y: y - oy }), flipY: false, mode: 'identity', scale: 1 };
   }
 
   const floor = state.project.floorPlan;
@@ -446,7 +558,7 @@ function importedGeometryTransform(payload) {
           y: Number(floor.height) - padding - (y - Number(source.minY)) * scale,
         }),
         flipY: true,
-        mode: 'cad-preview',
+        mode: 'cad-preview', scale,
       };
     }
   }
@@ -462,16 +574,17 @@ function importedGeometryTransform(payload) {
   return {
     point: (x, y) => ({ x: left + (x - ox) * scale, y: top + sourceHeight * scale - (y - oy) * scale }),
     flipY: true,
-    mode: 'fit-canvas',
+    mode: 'fit-canvas', scale,
   };
 }
 
 function applyStagingGeometry(payload, sourceName = 'geometry.v2') {
-  const imported = normalizeImportedGeometry(payload);
+  const prepared = CenterlinePairs.prepare(payload);
+  const imported = normalizeImportedGeometry(prepared.payload);
   state.stagingGeometry = imported;
-  updateAuditCard({ ...payload, metadata: { ...(payload.metadata || {}), source: sourceName } }, 'staging');
+  updateAuditCard({ ...prepared.payload, metadata: { ...(prepared.payload.metadata || {}), source: sourceName } }, 'staging');
   state.selected = null; drawStagingGeometry(); $('#audit-actions').hidden = false;
-  showToast(`Импортирован ${sourceName}: стен — ${imported.walls.length}, дверей — ${imported.doors.length}, окон — ${imported.windows.length}`);
+  showToast(`Импортирован ${sourceName}: стен — ${imported.walls.length}, проёмов — ${prepared.recognizedOpenings}, проверить — ${prepared.remainingHints}`);
 }
 
 function clearStagingGeometry() { state.stagingGeometry = null; if (state.stagingLayer) state.stagingLayer.removeChildren(); $('#audit-actions').hidden = true; }
@@ -493,6 +606,10 @@ function snapshot() { return {geometry:clone(state.geometry),equipment:clone(sta
 function beginMutation(domain='geometry') { state.history.push(snapshot()); if (state.history.length > 100) state.history.shift(); state.future = []; domain==='equipment'?setEquipmentDirty(true):setDirty(true); }
 function setDirty(value) { state.dirty = value; $("#save-geometry").disabled = !value; $("#edit-status").textContent = value ? "есть изменения" : state.editorEnabled ? "редактирование" : "просмотр"; updateEditorButtons(); }
 function setEquipmentDirty(value) { state.equipmentDirty=value; $('#save-equipment').disabled=!value; $('#equipment-status').textContent=value?'есть изменения':`${state.equipment.length} размещено`; updateEditorButtons(); }
+function refreshDirtyFromSaved() {
+  setDirty(JSON.stringify(state.geometry)!==JSON.stringify(state.savedGeometry));
+  setEquipmentDirty(JSON.stringify(state.equipment)!==JSON.stringify(state.savedEquipment));
+}
 
 function nextEquipmentCode(prefix) {
   const used=new Set(state.equipment.map(item=>item.code));let number=1;
@@ -588,7 +705,7 @@ function deleteSelected() {
   state.selected = null; drawGeometry();drawEquipment(); showGeometryCard();
 }
 
-function restoreSnapshot(saved){state.geometry=clone(saved.geometry);state.equipment=clone(saved.equipment);state.selected=null;setDirty(true);setEquipmentDirty(true);drawGeometry();drawEquipment();showGeometryCard();}
+function restoreSnapshot(saved){state.geometry=clone(saved.geometry);state.equipment=clone(saved.equipment);state.selected=null;refreshDirtyFromSaved();drawGeometry();drawEquipment();showGeometryCard();}
 function undo() { if (!state.history.length) return; state.future.push(snapshot()); restoreSnapshot(state.history.pop()); }
 function redo() { if (!state.future.length) return; state.history.push(snapshot()); restoreSnapshot(state.future.pop()); }
 function clearDraft() { if (state.draftLayer) state.draftLayer.removeChildren(); }
@@ -606,6 +723,7 @@ function handleEditorDown(event) {
   if (state.tool === "door-left") return addDoor(point, "left", 1);
   if (state.tool === "door-right") return addDoor(point, "right", 1);
   if (state.tool === "door-double") return addDoor(point, "right", 2);
+  if (state.tool === "door-manual") return addDoor(point, "unknown", state.manualDoorLeafCount);
   if (state.tool === "window") return addWindow(point);
   if(state.tool.startsWith('equipment:'))return addEquipment(point,state.tool.split(':')[1]);
   state.selected = nearestElement(point);
@@ -659,16 +777,25 @@ function bindCanvasNavigation() {
   canvas.addEventListener("wheel", (event) => { event.preventDefault(); zoomAt(event.deltaY < 0 ? 1.12 : 0.89, event.clientX, event.clientY); }, { passive: false });
   canvas.addEventListener("pointerdown", (event) => {
     canvas.setPointerCapture(event.pointerId);
-    if (state.editorEnabled && state.tool!=='pan' && !state.spaceHeld && event.button!==1) return handleEditorDown(event);
+    if (state.viewMode === 'source' && state.doorSampleMode && event.button === 0) {
+      state.doorSampleStart = worldPoint(event); state.doorSampleCurrent = state.doorSampleStart;
+      drawDoorRecognition(); return;
+    }
+    if (state.viewMode === '2d' && state.editorEnabled && state.tool!=='pan' && !state.spaceHeld && event.button!==1) return handleEditorDown(event);
     state.dragging = true; state.dragStart = { x: event.clientX, y: event.clientY }; state.worldStart = { x: state.world.x, y: state.world.y };
   });
   canvas.addEventListener("pointermove", (event) => {
     const point = worldPoint(event); $("#cursor-coordinates").textContent = `${point.x.toFixed(0)} / ${point.y.toFixed(0)}`;
+    if (state.doorSampleStart) { state.doorSampleCurrent = point; drawDoorRecognition(); return; }
     if (state.editorEnabled && !state.dragging) return handleEditorMove(event);
     if (state.dragging) state.world.position.set(state.worldStart.x + event.clientX - state.dragStart.x, state.worldStart.y + event.clientY - state.dragStart.y);
   });
   const stop = () => { state.dragging = false; state.moving = null; };
-  canvas.addEventListener("pointerup", stop); canvas.addEventListener("pointercancel", stop);
+  canvas.addEventListener("pointerup", () => {
+    if (state.doorSampleStart) { const end=state.doorSampleCurrent; finishDoorSample(state.doorSampleStart,end); return; }
+    stop();
+  });
+  canvas.addEventListener("pointercancel", () => { cancelDoorSampleSelection(); stop(); });
   canvas.addEventListener("pointerleave", () => { $("#cursor-coordinates").textContent = "— / —"; });
 }
 
@@ -679,12 +806,59 @@ function setTool(tool) {
   $("#floor-plan-container").dataset.tool = tool;
   if (tool==='pan') return setEditorHint('Зажмите левую кнопку и перемещайте весь план');
   if(tool.startsWith('equipment:'))return setEditorHint(`Размещение: ${equipmentCatalog[tool.split(':')[1]].name}`);
-  setEditorHint({ select: "Выберите или перетащите элемент", wall: "Стена: укажите первую точку", partition: "Перегородка: укажите первую точку", "door-left": "Левая дверь: нажмите рядом со стеной", "door-right": "Правая дверь: нажмите рядом со стеной", "door-double": "Двойная дверь: нажмите рядом со стеной", window: "Окно: нажмите рядом со стеной" }[tool]);
+  setEditorHint({ select: "Выберите или перетащите элемент", wall: "Стена: укажите первую точку", partition: "Перегородка: укажите первую точку", "door-left": "Левая дверь: нажмите рядом со стеной", "door-right": "Правая дверь: нажмите рядом со стеной", "door-double": "Двойная дверь: нажмите рядом со стеной", "door-manual": `${state.manualDoorLeafCount===2?'Двустворчатая':'Одностворчатая'} дверь: нажмите на стену`, window: "Окно: нажмите рядом со стеной" }[tool]);
+}
+
+function cancelDoorSampleSelection() {
+  state.doorSampleStart=null;state.doorSampleCurrent=null;drawDoorRecognition();
+}
+
+function setDoorSampleMode(active) {
+  state.doorSampleMode=Boolean(active);cancelDoorSampleSelection();
+  $('#door-train-sample').classList.toggle('is-active',state.doorSampleMode);
+  $('#door-train-sample').textContent=state.doorSampleMode?'Отменить выделение':'Обучить по образцу';
+  if(state.doorSampleMode) $('#editor-hint').textContent='Обведите рамкой один дверной символ целиком';
+}
+
+async function finishDoorSample(start,end) {
+  state.doorSampleStart=null;state.doorSampleCurrent=null;setDoorSampleMode(false);
+  if(!end||Math.abs(end.x-start.x)<8||Math.abs(end.y-start.y)<8)return showToast('Выделите весь символ двери рамкой',true);
+  const bounds={minX:Math.min(start.x,end.x),minY:Math.min(start.y,end.y),maxX:Math.max(start.x,end.x),maxY:Math.max(start.y,end.y)};
+  const leafCount=Number($('#door-sample-type').value)===2?2:1;
+  state.projectBusy=true;$('#door-train-sample').disabled=true;
+  try{
+    const response=await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/door-patterns/detect`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bounds,leaf_count:leafCount})});
+    const result=await response.json();if(!response.ok)throw new Error(result.detail||'Не удалось распознать образец двери');
+    state.modelVersion=Number(result.model_version)||state.modelVersion;setDoorDetectionRun(result.run);
+    if(result.run.candidate_count)showToast(`Шаблон сохранён. Найдено похожих дверей: ${result.run.candidate_count}`);
+    else showToast('Шаблон сохранён, но похожих дверей на листе не найдено',true);
+  }catch(error){showToast(error.message,true);}finally{state.projectBusy=false;$('#door-train-sample').disabled=false;drawDoorRecognition();}
+}
+
+async function decideDoorCandidates(decision) {
+  if(!state.doorDetectionRun)return;
+  state.projectBusy=true;
+  try{
+    const response=await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/door-detection-runs/${encodeURIComponent(state.doorDetectionRun.run_id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision,expected_model_version:state.modelVersion})});
+    const result=await response.json();if(!response.ok)throw new Error(result.detail||'Не удалось сохранить решение');
+    state.modelVersion=Number(result.model_version)||state.modelVersion;
+    if(decision==='accepted'){
+      state.geometry=result.geometry;state.savedGeometry=clone(state.geometry);setDirty(false);setDoorDetectionRun(null);await setViewMode('2d');drawGeometry();showGeometryCard();
+      showToast(`Двери добавлены: ${result.accepted_count}${result.conflicts?.length?`, конфликтов: ${result.conflicts.length}`:''}`);
+    }else{setDoorDetectionRun(null);showToast('Найденные двери отклонены; рабочий план не изменён');}
+  }catch(error){showToast(error.message,true);}finally{state.projectBusy=false;}
+}
+
+async function activateManualDoor() {
+  state.manualDoorLeafCount=Number($('#door-sample-type').value)===2?2:1;setDoorSampleMode(false);
+  await setViewMode('2d');if(!state.editorEnabled)toggleEditor();setTool('door-manual');
+  showToast(`Ручная постановка: ${state.manualDoorLeafCount===2?'двустворчатая':'одностворчатая'} дверь. Нажмите на нужную стену.`);
 }
 
 function setEditorHint(text) { $("#editor-hint").textContent = state.editorEnabled ? text : "Режим просмотра"; $("#editor-hint").classList.toggle("is-editing", state.editorEnabled); }
 function toggleEditor() {
   if (state.viewMode === '25d') return showToast('Вернитесь в «План 2D» для редактирования');
+  if (state.viewMode === 'source') return showToast('Подложка предназначена для сравнения. Вернитесь в «План 2D» для редактирования');
   state.editorEnabled = !state.editorEnabled;
   $("#editor-toggle").setAttribute("aria-pressed", String(state.editorEnabled));
   $("#editor-section").classList.toggle("is-visible", state.editorEnabled);
@@ -702,33 +876,34 @@ function showGeometryCard() {
     const doorOptions=['<option value="">Не привязано</option>',...state.geometry.doors.map(door=>`<option value="${escapeHtml(door.id)}" ${item.hostDoorId===door.id?'selected':''}>${escapeHtml(door.id)}</option>`)].join('');
     const served=new Set(item.servedDoorIds||[]),readerLoad=state.geometry.doors.filter(door=>served.has(door.id)).reduce((sum,door)=>sum+(door.readerCount||1),0);
     const controllerFields=item.type==='controller'?`<label class="card-field">Форм-фактор<select data-equipment-field="formFactor"><option value="wall_enclosure">Корпус настенного исполнения</option><option value="din_rail">Модуль на DIN-рейку</option></select></label><label class="card-field">Ёмкость, дверей<select data-equipment-field="controllerDoorCapacity">${[1,2,4,8].map(value=>`<option value="${value}">${value}</option>`).join('')}</select></label><label class="card-field">Ёмкость, считывателей<input data-equipment-field="controllerReaderCapacity" type="number" min="1" max="32" value="${item.controllerReaderCapacity||8}"></label><fieldset class="controller-doors"><legend>Обслуживаемые точки доступа</legend>${state.geometry.doors.map(door=>`<label><input type="checkbox" data-controller-door="${escapeHtml(door.id)}" ${served.has(door.id)?'checked':''}>${escapeHtml(door.accessPointCode||door.id)} · ${door.readerCount||1} сч.</label>`).join('')||'<p>Дверей пока нет</p>'}</fieldset><p class="editor-help">Загрузка: ${served.size}/${item.controllerDoorCapacity||4} дверей, ${readerLoad}/${item.controllerReaderCapacity||8} считывателей. Форм-фактор и место независимы: DIN-модуль может находиться в шкафу, в локальном настенном боксе или в боксе за потолком.</p>`:`<label class="card-field">Связанная дверь<select data-equipment-field="hostDoorId">${doorOptions}</select></label>`;
-    $("#object-card").innerHTML=`<div class="object-card__content"><div class="object-card__head"><h3>${escapeHtml(item.code)}</h3><span class="status-badge">СКУД</span></div><dl><dt>Тип</dt><dd>${escapeHtml(definition.name)}</dd><dt>Координаты</dt><dd>${item.x.toFixed(0)} / ${item.y.toFixed(0)}</dd></dl><label class="card-field">Обозначение<input data-equipment-field="code" maxlength="80" value="${escapeHtml(item.code)}"></label><label class="card-field">Место монтажа<select data-equipment-field="mount"><option value="wall">На стене (в боксе / на DIN-рейке)</option><option value="door">На двери/проёме</option><option value="ceiling">За потолком (в боксе / на DIN-рейке)</option><option value="cabinet">В шкафу</option><option value="free">Без привязки</option></select></label><label class="card-field">Высота, мм<input data-equipment-field="mountingHeight" type="number" min="0" max="10000" value="${item.mountingHeight}"></label>${controllerFields}<label class="card-field">Статус<select data-equipment-field="status"><option value="proposed">Предложено</option><option value="confirmed">Подтверждено</option></select></label></div>`;
+    $("#object-card").innerHTML=`<div class="object-card__content"><div class="object-card__head"><h3>${escapeHtml(item.code)}</h3><span class="status-badge">${escapeHtml(definition.system||systemLabels[item.system]||'Инженерная система')}</span></div><dl><dt>Тип</dt><dd>${escapeHtml(definition.name)}</dd><dt>Координаты</dt><dd>${item.x.toFixed(0)} / ${item.y.toFixed(0)}</dd></dl><label class="card-field">Обозначение<input data-equipment-field="code" maxlength="80" value="${escapeHtml(item.code)}"></label><label class="card-field">Место монтажа<select data-equipment-field="mount"><option value="wall">На стене (в боксе / на DIN-рейке)</option><option value="door">На двери/проёме</option><option value="ceiling">За потолком (в боксе / на DIN-рейке)</option><option value="cabinet">В шкафу</option><option value="free">Без привязки</option></select></label><label class="card-field">Высота, мм<input data-equipment-field="mountingHeight" type="number" min="0" max="10000" value="${item.mountingHeight}"></label>${controllerFields}<label class="card-field">Статус<select data-equipment-field="status"><option value="proposed">Предложено</option><option value="confirmed">Подтверждено</option></select></label></div>`;
     $("#object-card [data-equipment-field=mount]").value=item.mount;
     $("#object-card [data-equipment-field=status]").value=item.status;
     if(item.type==='controller'){$("#object-card [data-equipment-field=formFactor]").value=item.formFactor||'wall_enclosure';$("#object-card [data-equipment-field=controllerDoorCapacity]").value=String(item.controllerDoorCapacity||4);}
     if(item.type!=='controller'&&item.hostDoorId){const button=document.createElement('button');button.className='save-geometry';button.textContent='Оборудование двери · А / Б';button.onclick=()=>openDoorEditor(item.hostDoorId);$('#object-card .object-card__content').append(button);}
     return;
   }
-  const type = state.selected.kind === "wall" ? item.type === "partition" ? "Перегородка" : "Стена" : state.selected.kind === "door" ? item.leafCount === 2 ? "Двойная дверь" : "Одинарная дверь" : "Окно";
+  const type = state.selected.kind === "wall" ? item.type === "partition" ? "Перегородка" : "Стена" : state.selected.kind === "door" ? item.swing === 'unknown' ? "Дверной проём · петли не подтверждены" : item.leafCount === 2 ? "Двойная дверь" : "Одинарная дверь" : "Окно";
   const details = state.selected.kind === "wall" ? `<dt>Начало</dt><dd>${item.x1.toFixed(0)} / ${item.y1.toFixed(0)}</dd><dt>Конец</dt><dd>${item.x2.toFixed(0)} / ${item.y2.toFixed(0)}</dd>` : `<dt>Стена</dt><dd>${escapeHtml(item.wallId)}</dd><dt>Центр</dt><dd>${item.x.toFixed(0)} / ${item.y.toFixed(0)}</dd>`;
-  const doorActions = state.selected.kind === "door" ? `<label class="card-field">Точка доступа<input data-door-field="accessPointCode" placeholder="ТД.1.1" value="${escapeHtml(item.accessPointCode||'')}"></label><label class="card-field">Считыватели<select data-door-field="readerCount"><option value="1">1 — вход по карте, выход по кнопке</option><option value="2" ${item.readerCount===2?'selected':''}>2 — считыватель с обеих сторон</option></select></label><div class="object-card__actions"><button type="button" data-door-action="flip">Петли: ${item.swing === "left" ? "слева" : "справа"}</button><button type="button" data-door-action="side">Сменить сторону открытия (${item.openingSide === 1 ? 'Б' : 'А'})</button><button type="button" data-door-action="toggle-leaves">${item.leafCount === 2 ? "Сделать одинарной" : "Сделать двойной"}</button></div><p class="editor-help">Код вида ТД.1.1 определяет проектные обозначения приборов. Число считывателей учитывается в загрузке контроллера.</p>` : state.selected.kind === 'window' ? `<p class="editor-help">Ширина: ${item.width} ед. плана. Перетащите вдоль стены; Alt — перенос на другую стену.</p>` : "";
-  $("#object-card").innerHTML = `<div class="object-card__content"><div class="object-card__head"><h3>${escapeHtml(item.id)}</h3><span class="status-badge">выбран</span></div><dl><dt>Тип</dt><dd>${type}</dd>${details}</dl>${doorActions}</div>`;
+  const doorActions = state.selected.kind === "door" ? `<label class="card-field">Точка доступа<input data-door-field="accessPointCode" placeholder="ТД.1.1" value="${escapeHtml(item.accessPointCode||'')}"></label><label class="card-field">Считыватели<select data-door-field="readerCount"><option value="1">1 — вход по карте, выход по кнопке</option><option value="2" ${item.readerCount===2?'selected':''}>2 — считыватель с обеих сторон</option></select></label><div class="object-card__actions"><button type="button" data-door-action="flip">Петли: ${item.swing === "unknown" ? "не заданы" : item.swing === "left" ? "слева" : "справа"}</button><button type="button" data-door-action="side">Сменить сторону открытия (${item.openingSide === 1 ? 'Б' : 'А'})</button><button type="button" data-door-action="toggle-leaves">${item.leafCount === 2 ? "Сделать одинарной" : "Сделать двойной"}</button></div><p class="editor-help">${item.swing==='unknown'?'Проём найден автоматически. Нажмите «Петли», чтобы подтвердить направление открывания. ':''}Код вида ТД.1.1 определяет проектные обозначения приборов. Число считывателей учитывается в загрузке контроллера.</p>` : state.selected.kind === 'window' ? `<p class="editor-help">Ширина: ${item.width} ед. плана. Перетащите вдоль стены; Alt — перенос на другую стену.</p>` : "";
+  const status = state.selected.kind === 'door' && item.swing === 'unknown' ? 'требует проверки' : 'выбран';
+  $("#object-card").innerHTML = `<div class="object-card__content"><div class="object-card__head"><h3>${escapeHtml(item.id)}</h3><span class="status-badge">${status}</span></div><dl><dt>Тип</dt><dd>${type}</dd>${details}</dl>${doorActions}</div>`;
   if(state.selected.kind==='door')$('#object-card .object-card__actions').insertAdjacentHTML('afterbegin','<button type="button" data-door-action="equipment">Оборудование двери · А / Б</button>');
 }
 
 function updateEditorButtons() { $("#delete-element").disabled = !selectedEditable(); $("#undo-edit").disabled = !state.history.length; $("#redo-edit").disabled = !state.future.length; }
-function updateVisibleCount() { if (state.geometry) { const edited=state.geometry.walls.length+state.geometry.doors.length+state.geometry.windows.length+state.markers.length; const cad=state.cadPreview?.paths?.length||0; $("#visible-count").textContent = cad ? `${edited} ред. · ${cad} CAD` : `${edited} элементов`; } }
+function updateVisibleCount() { if (state.geometry) { const walls=state.geometry.walls.length,doorReview=doorReviewSummary(state.geometry.doors),windows=state.geometry.windows.length,equipment=state.markers.length,cad=state.cadPreview?.paths?.length||0; const doorLabel=doorReview.total?`${doorReview.total} проёмов${doorReview.pending?` (${doorReview.pending} без петель)`:''}`:null; const parts=[`${walls} стен`,doorLabel,windows?`${windows} окон`:null,equipment?`${equipment} приборов`:null,cad?`${cad} CAD`:null].filter(Boolean); $("#visible-count").textContent=parts.join(' · '); } }
 
 async function saveGeometry() {
   const response = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/geometry`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(state.geometry) });
   const result = await response.json(); if (!response.ok) throw new Error(result.detail || "Не удалось сохранить геометрию");
-  state.geometry = result.geometry; if(!state.equipmentDirty){state.history=[];state.future=[];} setDirty(false); if (state.audit) updateAuditCard({ ...state.geometry, metadata: state.audit }, 'saved'); drawGeometry(); showToast(`Сохранено: ${result.walls} стен, ${result.doors} дверей, ${result.windows} окон`);
+  state.geometry = result.geometry; state.savedGeometry=clone(state.geometry); if(!state.equipmentDirty){state.history=[];state.future=[];} setDirty(false); if (state.audit) updateAuditCard({ ...state.geometry, metadata: state.audit }, 'saved'); drawGeometry(); showToast(`Сохранено: ${result.walls} стен, ${result.doors} дверей, ${result.windows} окон`);
 }
 
 async function saveEquipment() {
   const response=await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/equipment`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({equipment:state.equipment})});
   const result=await response.json();if(!response.ok)throw new Error(result.detail||'Не удалось сохранить оборудование');
-  state.equipment=result.equipment;state.project.equipment=state.equipment;if(!state.dirty){state.history=[];state.future=[];}setEquipmentDirty(false);drawEquipment();showToast(`Оборудование сохранено: ${result.count}`);
+  state.equipment=result.equipment;state.project.equipment=state.equipment;state.savedEquipment=clone(state.equipment);if(!state.dirty){state.history=[];state.future=[];}setEquipmentDirty(false);drawEquipment();showToast(`Оборудование сохранено: ${result.count}`);
 }
 
 async function uploadCad(file) {
@@ -737,9 +912,12 @@ async function uploadCad(file) {
   const response = await fetch(`/api/parse-cad?project_id=${encodeURIComponent(state.projectId)}`, { method: "POST", body: data }), result = await response.json();
   if (!response.ok) throw new Error(result.detail || "Ошибка чтения CAD");
   const record=await loadJson(`/api/projects/${encodeURIComponent(state.projectId)}`,'DWG прочитан, но результат не удалось открыть');
-  state.project=record.project;state.geometry=record.geometry;state.equipment=record.project.equipment||[];state.cadPreview=record.cadPreview||null;state.cadAreas=record.cadAreas||[];
-  renderCadLayouts(record.cadLayouts, record.cadSelectedLayout);
+  state.project=record.project;state.geometry=record.geometry;state.equipment=record.project.equipment||[];state.cadPreview=record.cadPreview||null;state.cadPreviewMaster=record.cadPreviewMaster||record.cadPreview||null;state.cadAreas=record.cadAreas||[];
+  state.cadAppliedLayout=record.cadAppliedLayout||null;
+  updateSourceViewAvailability();
+  renderCadLayouts(record.cadLayouts, record.cadSelectedLayout, state.cadAppliedLayout);
   state.history=[];state.future=[];setDirty(false);setEquipmentDirty(false);
+  state.savedGeometry=clone(state.geometry);state.savedEquipment=clone(state.equipment);
   $("#source-label").textContent = file.name; await drawPlan(); fitPlan();
   const preview=result.preview;
   showToast(`CAD распознан: ${result.summary?.walls||0} стен, ${result.summary?.recognizedDoors||0} дверей. Найдено оборудования: ${result.equipment.length}.`);
@@ -777,21 +955,33 @@ function bindInterface() {
   });
   $('#cad-layout-select').addEventListener('change',event=>{
     state.cadPendingLayout=event.target.value||null;
-    $('#cad-layout-apply').disabled=!state.cadPendingLayout;
+    $('#cad-layout-apply').disabled=!state.cadPendingLayout||state.cadPendingLayout===state.cadAppliedLayout;
     $('#cad-layout-gallery').querySelectorAll('[data-cad-layout]').forEach(card=>card.classList.toggle('is-selected',card.dataset.cadLayout===state.cadPendingLayout));
-    if(state.cadPendingLayout) { $('#floor-plan-title').textContent=`Предпросмотр · ${state.cadPendingLayout}`; showToast(`Предпросмотр листа: ${state.cadPendingLayout}`); }
+    $('#floor-plan-title').textContent=state.cadPendingLayout===state.cadAppliedLayout
+      ? state.project.floorPlan.name||'План этажа' : `Ожидает применения · ${state.cadPendingLayout||'лист не выбран'}`;
+    if(state.cadPendingLayout!==state.cadAppliedLayout) showToast(`Лист выбран: ${state.cadPendingLayout}. Нажмите «Выбрать страницу»`);
   });
   $('#cad-layout-gallery').addEventListener('click',event=>{
     const card=event.target.closest('[data-cad-layout]'); if(!card)return;
     $('#cad-layout-select').value=card.dataset.cadLayout; $('#cad-layout-select').dispatchEvent(new Event('change',{bubbles:true}));
   });
+  $('#cad-layout-toggle').addEventListener('click',()=>setCadLayoutsCollapsed(!state.cadLayoutsCollapsed));
   $('#cad-layout-apply').addEventListener('click',async()=>{
     if(!state.cadPendingLayout)return;
+    if(state.dirty||state.equipmentDirty)return showToast('Сначала сохраните изменения текущего листа',true);
+    const button=$('#cad-layout-apply');button.disabled=true;state.projectBusy=true;
     try {
       const response=await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/cad-layout`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({layout:state.cadPendingLayout})});
       const result=await response.json(); if(!response.ok) throw new Error(result.detail||'Не удалось выбрать лист CAD');
-      state.cadSelectedLayout=result.layout; state.project.floorPlan.name=result.layout; $('#floor-plan-title').textContent=result.layout; $('#cad-layout-apply').disabled=true; showToast(`Страница выбрана: ${result.layout}`);
-    } catch(error){showToast(error.message,true);}
+      state.cadSelectedLayout=result.layout; state.cadPendingLayout=result.layout; state.cadAppliedLayout=result.appliedLayout||result.layout; state.project.floorPlan.name=result.layout;
+      state.cadPreview=result.cadPreview||null;state.cadPreviewMaster=result.cadPreviewMaster||state.cadPreviewMaster||state.cadPreview;state.cadAreas=result.cadAreas||state.cadAreas;
+      state.geometry=result.geometry;state.equipment=result.equipment||[];state.project.equipment=state.equipment;
+      state.savedGeometry=clone(state.geometry);state.savedEquipment=clone(state.equipment);state.history=[];state.future=[];state.selected=null;
+      setDirty(false);setEquipmentDirty(false);renderCadLayouts(result.cadLayouts,result.layout,state.cadAppliedLayout);
+      $('#floor-plan-title').textContent=result.layout;$('#source-label').textContent=`CAD-подложка · ${state.cadPreview?.layers?.length||0} слоёв`;
+      await drawPlan();fitPlan();showGeometryCard();
+      showToast(`На холст перенесён ${result.layout}: ${result.summary.walls} стен, ${result.summary.doors} проёмов, ${result.summary.equipment} приборов`);
+    } catch(error){button.disabled=false;showToast(error.message,true);}finally{state.projectBusy=false;}
   });
   window.addEventListener('beforeunload',event=>{if(state.dirty || state.equipmentDirty || state.projectBusy){event.preventDefault();event.returnValue='';}});
   renderLayers();
@@ -809,8 +999,13 @@ function bindInterface() {
   const releaseSpace=()=>{state.spaceHeld=false;if(state.volume)state.volume.spaceHeld=false;};
   window.addEventListener('keyup',e=>{if(e.code==='Space')releaseSpace();});
   window.addEventListener('blur',()=>{releaseSpace();state.dragging=false;state.moving=null;});
+  $('#view-source-only').addEventListener('click', () => setViewMode('source'));
   $('#view-2d').addEventListener('click', () => setViewMode('2d'));
   $('#view-25d').addEventListener('click', () => setViewMode('25d'));
+  $('#door-train-sample').addEventListener('click',()=>setDoorSampleMode(!state.doorSampleMode));
+  $('#door-add-manual').addEventListener('click',activateManualDoor);
+  $('#door-accept-candidates').addEventListener('click',()=>decideDoorCandidates('accepted'));
+  $('#door-reject-candidates').addEventListener('click',()=>decideDoorCandidates('rejected'));
   const changeCamera = () => state.volume?.setCamera(Number($('#view-tilt').value), Number($('#view-rotation').value));
   $('#view-tilt').addEventListener('input', changeCamera);
   $('#view-rotation').addEventListener('input', changeCamera);
@@ -835,7 +1030,7 @@ function bindInterface() {
     if (!door) return;
     if (action === 'equipment') return openDoorEditor(door.id);
     beginMutation();
-    if (action === "flip") door.swing = door.swing === "left" ? "right" : "left";
+    if (action === "flip") door.swing = door.swing === "unknown" ? "left" : door.swing === "left" ? "right" : "left";
     if (action === "side") door.openingSide = door.openingSide === 1 ? -1 : 1;
     if (action === "toggle-leaves") { door.leafCount = door.leafCount === 2 ? 1 : 2; door.width = door.leafCount === 2 ? Math.max(88, door.width) : Math.min(48, door.width); }
     drawGeometry(); showGeometryCard();
@@ -894,7 +1089,7 @@ function bindInterface() {
   });
   $("#cad-file").addEventListener("change", async (event) => { const [file] = event.target.files; if (!file) return; if(state.projectBusy){event.target.value='';return showToast('Дождитесь завершения загрузки файла');} state.projectBusy=true; try { await uploadCad(file); } catch (error) { showToast(error.message, true); } finally {state.projectBusy=false;event.target.value = "";} });
   window.addEventListener("keydown", (event) => {
-    if (document.querySelector('dialog[open]') || state.viewMode === '25d' || !state.editorEnabled || ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
+    if (document.querySelector('dialog[open]') || state.viewMode !== '2d' || !state.editorEnabled || ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
     if (["Delete", "Backspace"].includes(event.key)) { event.preventDefault(); deleteSelected(); }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") { event.preventDefault(); event.shiftKey ? redo() : undo(); }
     const shortcuts = { v: "select", w: "wall", p: "partition", l: "door-left", r: "door-right", d: "door-double", o: "window" }; if (shortcuts[event.key.toLowerCase()]) setTool(shortcuts[event.key.toLowerCase()]);
@@ -905,6 +1100,7 @@ function bindInterface() {
 
 async function setViewMode(mode) {
   if (!state.app || mode === state.viewMode || state.viewLoading) return;
+  if (mode === 'source' && !hasSourceUnderlay()) return showToast('В этом проекте пока нет исходной подложки');
   if (mode === '25d') {
     if (state.stagingGeometry) return showToast('Сначала примите или отклоните staging-геометрию');
     if (state.dirty) return showToast('Сначала нажмите «Сохранить геометрию», затем включите объёмный вид');
@@ -919,22 +1115,32 @@ async function setViewMode(mode) {
       });
       state.volume.setModel(saved, state.project.floorPlan, state.equipment);
       state.volume.panMode=$('#volume-navigation').value==='pan';
-      $('#view-25d-info').textContent = `Сохранённый план: ${saved.walls.length} стен и перегородок, ${saved.doors.length} дверей, ${(saved.windows || []).length} окон, ${state.equipment.length} единиц оборудования. Основание — прямоугольная подставка; контур пола ещё не выделен.`;
+      $('#view-source').disabled = !state.project.floorPlan.backgroundImage;
+      if ($('#view-source').disabled) { $('#view-source').checked = false; state.volume.showSource = false; }
+      const doorReview=doorReviewSummary(saved.doors);
+      $('#view-25d-info').textContent = `Сохранённый план: ${saved.walls.length} стен и перегородок, ${state.volume.columnCount || 0} квадратных колонн, ${doorReview.total} дверных проёмов${doorReview.pending ? `, ${doorReview.pending} без подтверждённых петель` : ''}, ${(saved.windows || []).length} окон, ${state.equipment.length} единиц оборудования. Проёмы без подтверждённых петель показаны без дверного полотна. Контур пола ещё не выделен; показываются только стены.`;
     } catch(error) { showToast(error.message, true); return; }
     finally { state.viewLoading = false; }
   }
   state.viewMode = mode;
   const volume = mode === '25d';
+  const sourceOnly = mode === 'source';
+  setDoorSampleMode(false);
   state.draftStart = null; state.moving = null; clearDraft();
   document.body.classList.toggle('view-25d', volume);
+  document.body.classList.toggle('view-source', sourceOnly);
   $('#view-25d-settings').hidden = !volume;
+  $('#door-recognition-toolbar').hidden = !sourceOnly;
   $('#plan-25d').hidden = !volume;
   state.app.canvas.style.display = volume ? 'none' : 'block';
-  $('#view-2d').setAttribute('aria-pressed', String(!volume));
+  $('#view-source-only').setAttribute('aria-pressed', String(sourceOnly));
+  $('#view-2d').setAttribute('aria-pressed', String(mode === '2d'));
   $('#view-25d').setAttribute('aria-pressed', String(volume));
-  $('#editor-toggle').disabled = volume;
+  $('#editor-toggle').disabled = volume || sourceOnly;
+  syncPlanLayerVisibility();
   if (state.volume) { state.volume.active = volume; state.volume.render(); }
   if (volume) setEditorHint('2.5D · сохранённая геометрия');
+  else if (sourceOnly) { setEditorHint('Исходная подложка · режим сравнения'); resizePlan(); }
   else { setTool('select'); resizePlan(); }
 }
 

@@ -8,13 +8,36 @@ vm.runInContext(fs.readFileSync(path.join(__dirname, '../static/plan-25d.js'), '
 const scene = Object.create(context.window.Plan25D.prototype);
 scene.fit = () => {};
 const volumes = [];
-scene.box = (a,b,thickness,low,high,color) => volumes.push({a,b,low,high,color});
+scene.box = (a,b,thickness,low,high,color,hideEndFaces) => volumes.push({a,b,thickness,low,high,color,hideEndFaces});
 const model = {walls:[{id:'W',x1:0,y1:0,x2:400,y2:0,thickness:13,type:'wall'}],doors:[{id:'D',wallId:'W',x:80,y:0,width:48,swing:'left',leafCount:1}],windows:[{id:'WIN',wallId:'W',x:260,y:0,width:72}]};
 const before = JSON.stringify(model);
 scene.setModel(model,{width:400,height:300});
 assert.equal(JSON.stringify(model), before, 'Building volume must not mutate saved geometry');
 assert.equal(scene.openingCount, 2);
 const walls = volumes.filter(v => v.color[0] === 228);
+assert.ok(walls.length > 0);
+assert.ok(walls.every(v => v.thickness === 13/4), '2.5D walls use thin display volumes without changing saved thickness');
+assert.ok(walls.every(v => v.hideEndFaces === true), 'Wall pieces do not render false end-cap brackets at their junctions');
+assert.ok(volumes.filter(v => v.color[0] === 118).every(v => v.thickness === 13/4+2), 'Opening frames follow the display thickness');
+volumes.length=0;
+scene.setModel({walls:[{id:'W-CL',x1:0,y1:0,x2:100,y2:0,thickness:10,type:'wall'}],doors:[],windows:[]},{width:100,height:100});
+assert.ok(volumes.filter(v=>v.color[0]===228).every(v=>v.thickness===4),'Measured face pair becomes one restrained display wall');
+volumes.length=0;
+const squareColumn={walls:[
+  {id:'C1',x1:0,y1:0,x2:10,y2:0,thickness:13,type:'wall'},
+  {id:'C2',x1:10,y1:0,x2:10,y2:10,thickness:13,type:'wall'},
+  {id:'C3',x1:10,y1:10,x2:0,y2:10,thickness:13,type:'wall'},
+  {id:'C4',x1:0,y1:10,x2:0,y2:0,thickness:13,type:'wall'},
+],doors:[],windows:[]};
+scene.setModel(squareColumn,{width:100,height:100});
+assert.equal(scene.columnCount,1,'A closed square CAD contour is recognized as one column');
+assert.equal(volumes.length,0,'Column sides are not extruded as four thick crossing walls');
+assert.equal(scene.faces.length,5,'A square column is one solid prism with one top and four sides');
+const uncappedScene={faces:[]};
+context.window.Plan25D.prototype.box.call(uncappedScene,{x:0,y:0},{x:10,y:0},4,0,10,[228,231,228],true);
+assert.equal(uncappedScene.faces.length,3,'An uncapped wall volume has a top and two long side faces');
+volumes.length=0;
+scene.setModel(model,{width:400,height:300});
 const covers = (x,z) => walls.some(v => v.a.x<x && v.b.x>x && v.low<z && v.high>z);
 assert.equal(covers(80,50),false,'Door must have a real empty opening');
 assert.equal(covers(80,130),true,'Door header remains');
@@ -43,6 +66,10 @@ for (const leafCount of [1,2]) for (const swing of ['left','right']) {
   tips[0].forEach((y,i)=>assert.equal(y,-tips[1][i],'Opening side mirrors each leaf'));
 }
 console.log('PASS: both opening sides for both hinges and double doors');
+volumes.length=0;
+scene.setModel({...model,doors:[{...model.doors[0],swing:'unknown'}]},{width:400,height:300});
+assert.equal(scene.openingCount,2);
+assert.equal(volumes.filter(v=>v.color[0]===161).length,0,'An inferred opening has no invented door leaf before hinge confirmation');
 const equipment=[
   {id:'EQ1',type:'reader',code:'YK1.1',x:80,y:0,rotation:0,mount:'wall',mountingHeight:1200},
   {id:'EQ2',type:'power_supply',code:'R1',x:160,y:0,rotation:0,mount:'ceiling',mountingHeight:2200},

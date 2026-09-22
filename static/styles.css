@@ -218,7 +218,14 @@ button { color: inherit; }
 .workspace { display: grid; grid-template-columns: 290px minmax(0, 1fr); min-height: 0; }
 .sidebar { min-height: 0; overflow-y: auto; border-right: 1px solid var(--line); background: #09171c; }
 .sidebar__section { padding: 24px; border-bottom: 1px solid var(--line); }
+.cad-layout-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.cad-layout-heading label { margin: 0; }
+.cad-layout-toggle { width: auto; min-height: 28px; padding: 4px 9px; border: 1px solid rgba(66,209,197,.45); background: transparent; color: var(--teal); font-size: .68rem; cursor: pointer; }
+.cad-layout-toggle:hover { background: rgba(66,209,197,.1); }
+.cad-layout-toggle::before { content: "▾"; display: inline-block; margin-right: 5px; transition: transform .16s ease; }
+.cad-layout-toggle[aria-expanded="false"]::before { transform: rotate(-90deg); }
 .cad-layout-gallery { display: grid; gap: 10px; margin: 10px 0; }
+.cad-layout-gallery[hidden] { display: none; }
 .cad-layout-card { padding: 5px; border: 1px solid rgba(255,255,255,0.12); background: #10252b; color: #c9d6d8; cursor: pointer; text-align: left; }
 .cad-layout-card:hover, .cad-layout-card.is-selected { border-color: var(--teal); background: rgba(66,209,197,0.1); }
 .cad-layout-card canvas { display: block; width: 100%; height: auto; background: #e9eeeb; }
@@ -289,12 +296,25 @@ button { color: inherit; }
 .view-switch, .angle-presets { display: flex; flex-wrap: wrap; gap: 5px; }
 .view-switch button, .angle-presets button { border: 1px solid #46616b; background: #10272d; color: #dce7e8; padding: 8px 10px; cursor: pointer; }
 .view-switch button[aria-pressed="true"] { background: #177a76; border-color: #42d1c5; }
+.view-switch button:disabled { cursor: not-allowed; opacity: .42; }
 .angle-presets { margin-top: 12px; }
 .view-range { width: 100%; accent-color: #42d1c5; margin-top: 10px; }
 #plan-25d { position: absolute; inset: 0; z-index: 1; touch-action: none; }
 #plan-25d[hidden], [hidden] { display: none !important; }
 body.view-25d #editor-section, body.view-25d #skud-equipment-section, body.view-25d #object-card, body.view-25d .scale-ruler, body.view-25d .sidebar__section--hint { display: none; }
 body.view-25d #editor-hint { max-width: 45%; }
+body.view-source #editor-section, body.view-source #skud-equipment-section, body.view-source #object-card, body.view-source .sidebar__section--hint { display: none; }
+body.view-source #editor-hint { border-color: rgba(66,209,197,.5); color: var(--teal-soft); }
+.door-recognition-toolbar { position: absolute; z-index: 5; top: 18px; left: 50%; transform: translateX(-50%); display: flex; align-items: flex-end; gap: 7px; max-width: calc(100% - 430px); padding: 8px; border: 1px solid rgba(66,209,197,.45); background: rgba(8,25,30,.94); box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.door-recognition-toolbar[hidden] { display: none; }
+.door-recognition-toolbar label { display: grid; gap: 4px; color: var(--muted); font-size: .65rem; }
+.door-recognition-toolbar select, .door-recognition-toolbar button { min-height: 34px; border: 1px solid #46616b; background: #10272d; color: #dce7e8; padding: 7px 9px; }
+.door-recognition-toolbar button { cursor: pointer; white-space: nowrap; }
+.door-recognition-toolbar button:hover, .door-recognition-toolbar button.is-active { border-color: var(--teal); background: rgba(66,209,197,.14); }
+.door-recognition-toolbar #door-accept-candidates { border-color: var(--teal); color: var(--teal-soft); }
+.door-recognition-toolbar #door-reject-candidates { border-color: rgba(244,189,92,.5); color: #ffdda3; }
+#door-candidate-count { align-self: center; color: var(--teal-soft); font-size: .72rem; white-space: nowrap; }
+@media (max-width: 1180px) { .door-recognition-toolbar { left: 14px; right: 14px; transform: none; max-width: none; flex-wrap: wrap; } }
 @media (max-width: 1100px) { .plan-panel__meta #source-label { display: none; } .view-switch button { font-size: 11px; padding: 7px; } }
 .plan-panel__foot { border-top: 1px solid var(--line); border-bottom: 0; color: var(--muted); font-size: 0.69rem; }
 .plan-panel__foot b { color: #c7d4d6; font-weight: 500; }
