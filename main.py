@@ -1981,9 +1981,39 @@ def latest_door_detection_run(project_id: str) -> dict[str, Any]:
     record = read_record(project_id)
     ensure_contract_fields(record)
     runs = record.get("door_detection_runs", [])
-    return {"run": runs[-1] if runs else None,
+    undo_run = None
+    for item in reversed(runs):
+        if item.get("status") not in {"accepted", "accepted_with_conflicts"}:
+            continue
+        if item.get("rollback") or infer_legacy_created_door_rollback(record, item):
+            undo_run = item
+            break
+    return {"run": runs[-1] if runs else None, "undo_run": undo_run,
             "model_version": record["model_version"],
             "pattern_count": len(record.get("door_patterns", []))}
+
+
+def infer_legacy_created_door_rollback(record: dict[str, Any],
+                                       run: dict[str, Any]) -> dict[str, Any] | None:
+    """Allow safe undo for an old run that only created, and never updated, doors."""
+    candidates = run.get("candidates", [])
+    if not candidates or any(item.get("target_door_id") for item in candidates):
+        return None
+    doors = record.get("geometry", {}).get("doors", [])
+    unmatched = list(doors)
+    created = []
+    numeric_fields = ("x", "y", "width", "rotation")
+    for candidate in candidates:
+        match = next((door for door in unmatched
+                      if door.get("wallId") == candidate.get("wallId")
+                      and door.get("leafCount") == candidate.get("leafCount")
+                      and all(abs(float(door.get(key, 0)) - float(candidate.get(key, 0))) < .01
+                              for key in numeric_fields)), None)
+        if match is None:
+            return None
+        unmatched.remove(match)
+        created.append({"id": match["id"], "accepted_hash": content_hash(match)})
+    return {"created": created, "updated": []}
 
 
 @app.post("/api/projects/{project_id}/door-detection-runs/{run_id}/decision")
@@ -2015,6 +2045,8 @@ def decide_door_detection_run(project_id: str, run_id: str,
         accepted = 0
         conflicts: list[str] = []
         updated_targets: set[str] = set()
+        created_ids: list[str] = []
+        updated_before: dict[str, dict[str, Any]] = {}
         next_number = 1
         for candidate in run.get("candidates", []):
             target_id = candidate.get("target_door_id")
@@ -2025,6 +2057,7 @@ def decide_door_detection_run(project_id: str, run_id: str,
                 if content_hash(target) != candidate.get("target_content_hash"):
                     conflicts.append(target_id)
                     continue
+                updated_before[target_id] = json.loads(json.dumps(target))
                 target.update({
                     "wallId": candidate["wallId"], "x": candidate["x"], "y": candidate["y"],
                     "width": candidate["width"], "rotation": candidate["rotation"],
@@ -2050,20 +2083,90 @@ def decide_door_detection_run(project_id: str, run_id: str,
                 "confidence": candidate["confidence"],
                 "reviewHint": candidate["reviewHint"],
             })
+            created_ids.append(door_id)
             accepted += 1
         try:
             record["geometry"] = validate_geometry(record["geometry"])
         except (TypeError, ValueError, KeyError, OverflowError) as error:
             raise HTTPException(422, str(error)) from error
+        normalized_by_id = {door["id"]: door for door in record["geometry"]["doors"]}
+        run["rollback"] = {
+            "created": [{"id": door_id, "accepted_hash": content_hash(normalized_by_id[door_id])}
+                        for door_id in created_ids],
+            "updated": [{"id": door_id, "before": before,
+                         "accepted_hash": content_hash(normalized_by_id[door_id])}
+                        for door_id, before in updated_before.items()],
+        }
         record["model_version"] += 1
         run["status"] = "accepted" if not conflicts else "accepted_with_conflicts"
         run["accepted_count"] = accepted
+        run["accepted_model_version"] = record["model_version"]
         run["conflicts"] = conflicts
         run["decided_at"] = utc_now()
         write_record(record)
-    return {"status": run["status"], "geometry": record["geometry"],
+    return {"status": run["status"], "geometry": record["geometry"], "run": run,
             "model_version": record["model_version"], "accepted_count": accepted,
             "conflicts": conflicts}
+
+
+@app.post("/api/projects/{project_id}/door-detection-runs/{run_id}/undo")
+def undo_door_detection_run(project_id: str, run_id: str,
+                            payload: dict[str, Any]) -> dict[str, Any]:
+    with PROJECTS_LOCK:
+        record = read_record(project_id)
+        ensure_contract_fields(record)
+        run = next((item for item in record.get("door_detection_runs", [])
+                    if item.get("run_id") == run_id), None)
+        if run is None:
+            raise HTTPException(404, "Запуск поиска дверей не найден")
+        if run.get("status") not in {"accepted", "accepted_with_conflicts"}:
+            raise HTTPException(409, "Этот результат уже отменён или не был принят")
+        rollback = run.get("rollback") or infer_legacy_created_door_rollback(record, run)
+        if not isinstance(rollback, dict):
+            raise HTTPException(409, "Для этого старого запуска отмена недоступна")
+
+        doors = record["geometry"].setdefault("doors", [])
+        by_id = {door["id"]: door for door in doors}
+        equipment = record.get("project", {}).get("equipment", [])
+        conflicts: list[str] = []
+        for item in rollback.get("created", []):
+            door = by_id.get(item.get("id"))
+            if door is None:
+                continue
+            door_id = door["id"]
+            linked = any(eq.get("hostDoorId") == door_id
+                         or door_id in (eq.get("servedDoorIds") or []) for eq in equipment)
+            if linked or content_hash(door) != item.get("accepted_hash"):
+                conflicts.append(door_id)
+        for item in rollback.get("updated", []):
+            door = by_id.get(item.get("id"))
+            if door is None or content_hash(door) != item.get("accepted_hash"):
+                conflicts.append(str(item.get("id")))
+        if conflicts:
+            labels = ", ".join(sorted(set(conflicts))[:8])
+            raise HTTPException(409, f"Сначала проверьте изменённые или связанные двери: {labels}")
+
+        created_ids = {item.get("id") for item in rollback.get("created", [])}
+        before_by_id = {item.get("id"): item.get("before")
+                        for item in rollback.get("updated", [])}
+        restored: list[dict[str, Any]] = []
+        for door in doors:
+            if door["id"] in created_ids:
+                continue
+            restored.append(before_by_id.get(door["id"], door))
+        record["geometry"]["doors"] = restored
+        try:
+            record["geometry"] = validate_geometry(record["geometry"])
+        except (TypeError, ValueError, KeyError, OverflowError) as error:
+            raise HTTPException(422, str(error)) from error
+        record["model_version"] += 1
+        run["status"] = "reverted"
+        run["reverted_at"] = utc_now()
+        run["reverted_model_version"] = record["model_version"]
+        write_record(record)
+    return {"status": "reverted", "geometry": record["geometry"],
+            "model_version": record["model_version"],
+            "removed_count": len(created_ids), "restored_count": len(before_by_id)}
 
 
 @app.post("/api/projects/{project_id}/files", status_code=201)

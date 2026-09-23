@@ -313,6 +313,82 @@ class ProjectsTest(unittest.TestCase):
         self.assertEqual(len(accepted["geometry"]["doors"]), 2)
         self.assertTrue(all(door["leafCount"] == 1 for door in accepted["geometry"]["doors"]))
         self.assertTrue(all(door["swing"] == "unknown" for door in accepted["geometry"]["doors"]))
+        self.assertEqual(main.latest_door_detection_run(project["id"])["undo_run"]["run_id"],
+                         result["run"]["run_id"])
+
+        reverted = main.undo_door_detection_run(
+            project["id"], result["run"]["run_id"],
+            {"expected_model_version": accepted["model_version"]})
+        self.assertEqual(reverted["removed_count"], 2)
+        self.assertEqual(reverted["restored_count"], 0)
+        self.assertEqual(reverted["geometry"], before)
+        self.assertIsNone(main.latest_door_detection_run(project["id"])["undo_run"])
+
+    def test_door_detection_undo_refuses_to_remove_a_manually_changed_door(self):
+        project = main.create_project({"name": "Защищённая отмена дверей"})
+        record = main.read_record(project["id"])
+        record["geometry"]["walls"] = [
+            {"id": "W1", "type": "wall", "x1": 0, "y1": 100,
+             "x2": 260, "y2": 100, "thickness": 13},
+        ]
+        record["cadPreview"] = {
+            "paths": [
+                {"layer": "DOOR", "points": [[40, 100], [72, 68]], "closed": False},
+                {"layer": "DOOR", "points": [[150, 100], [182, 68]], "closed": False},
+            ],
+            "labels": [], "layers": ["DOOR"], "truncated": False,
+        }
+        record["cadSelectedLayout"] = "Этаж 1"
+        main.write_record(record)
+        run = main.create_door_pattern(project["id"], {
+            "leaf_count": 1,
+            "bounds": {"minX": 30, "minY": 55, "maxX": 82, "maxY": 110},
+        })["run"]
+        accepted = main.decide_door_detection_run(
+            project["id"], run["run_id"],
+            {"decision": "accepted", "expected_model_version": 0})
+        changed = main.read_record(project["id"])
+        changed["geometry"]["doors"][0]["swing"] = "left"
+        main.write_record(changed)
+
+        with self.assertRaises(HTTPException) as raised:
+            main.undo_door_detection_run(
+                project["id"], run["run_id"],
+                {"expected_model_version": accepted["model_version"]})
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(len(main.read_record(project["id"])["geometry"]["doors"]), 2)
+
+    def test_legacy_create_only_door_run_can_be_undone_safely(self):
+        project = main.create_project({"name": "Старая партия дверей"})
+        record = main.read_record(project["id"])
+        record["geometry"]["walls"] = [
+            {"id": "W1", "type": "wall", "x1": 0, "y1": 100,
+             "x2": 260, "y2": 100, "thickness": 13},
+        ]
+        record["cadPreview"] = {
+            "paths": [{"layer": "DOOR", "points": [[40, 100], [72, 68]], "closed": False}],
+            "labels": [], "layers": ["DOOR"], "truncated": False,
+        }
+        record["cadSelectedLayout"] = "Этаж 1"
+        main.write_record(record)
+        run = main.create_door_pattern(project["id"], {
+            "leaf_count": 1,
+            "bounds": {"minX": 30, "minY": 55, "maxX": 82, "maxY": 110},
+        })["run"]
+        accepted = main.decide_door_detection_run(
+            project["id"], run["run_id"],
+            {"decision": "accepted", "expected_model_version": 0})
+        legacy = main.read_record(project["id"])
+        legacy["door_detection_runs"][-1].pop("rollback")
+        main.write_record(legacy)
+
+        self.assertEqual(main.latest_door_detection_run(project["id"])["undo_run"]["run_id"],
+                         run["run_id"])
+        reverted = main.undo_door_detection_run(
+            project["id"], run["run_id"],
+            {"expected_model_version": accepted["model_version"]})
+        self.assertEqual(reverted["removed_count"], 1)
+        self.assertEqual(reverted["geometry"]["doors"], [])
 
     def test_door_sample_matches_shape_not_only_layer_and_length(self):
         project = main.create_project({"name": "Дверной шаблон"})

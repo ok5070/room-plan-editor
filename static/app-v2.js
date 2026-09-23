@@ -8,7 +8,7 @@ const state = {
   history: [], future: [], dirty: false, equipmentDirty: false, savedGeometry: null, savedEquipment: null,
   viewMode: '2d', volume: null, stagingGeometry: null, audit: null, cadAppliedLayout: null, cadLayoutsCollapsed: false,
   modelVersion: 0, doorSampleMode: false, doorSampleStart: null, doorSampleCurrent: null,
-  doorDetectionRun: null, doorCandidates: [], manualDoorLeafCount: 1,
+  doorDetectionRun: null, doorUndoRun: null, doorCandidates: [], manualDoorLeafCount: 1,
   projectId: new URLSearchParams(location.search).get('project') || 'initial',
 };
 
@@ -108,8 +108,10 @@ async function loadLatestDoorDetection() {
     const result = await loadJson(`/api/projects/${encodeURIComponent(state.projectId)}/door-detection-runs/latest`, 'Не удалось загрузить результаты поиска дверей');
     state.modelVersion = Number(result.model_version) || state.modelVersion;
     setDoorDetectionRun(result.run?.status === 'pending' ? result.run : null);
+    setDoorUndoRun(result.undo_run || null);
   } catch (error) {
     setDoorDetectionRun(null);
+    setDoorUndoRun(null);
   }
 }
 
@@ -121,6 +123,14 @@ function setDoorDetectionRun(run) {
   $('#door-reject-candidates').hidden = !count;
   $('#door-candidate-count').textContent = count ? `Найдено: ${count}` : '';
   drawDoorRecognition();
+}
+
+function setDoorUndoRun(run) {
+  state.doorUndoRun = run;
+  const button = $('#door-undo-accepted');
+  const count = Number(run?.accepted_count) || 0;
+  button.hidden = !run;
+  button.textContent = count ? `Отменить добавление: ${count}` : 'Отменить добавление';
 }
 
 function hasSourceUnderlay() {
@@ -843,10 +853,22 @@ async function decideDoorCandidates(decision) {
     const result=await response.json();if(!response.ok)throw new Error(result.detail||'Не удалось сохранить решение');
     state.modelVersion=Number(result.model_version)||state.modelVersion;
     if(decision==='accepted'){
-      state.geometry=result.geometry;state.savedGeometry=clone(state.geometry);setDirty(false);setDoorDetectionRun(null);await setViewMode('2d');drawGeometry();showGeometryCard();
+      state.geometry=result.geometry;state.savedGeometry=clone(state.geometry);setDirty(false);setDoorDetectionRun(null);setDoorUndoRun(result.run||null);await setViewMode('2d');drawGeometry();showGeometryCard();
       showToast(`Двери добавлены: ${result.accepted_count}${result.conflicts?.length?`, конфликтов: ${result.conflicts.length}`:''}`);
     }else{setDoorDetectionRun(null);showToast('Найденные двери отклонены; рабочий план не изменён');}
   }catch(error){showToast(error.message,true);}finally{state.projectBusy=false;}
+}
+
+async function undoAcceptedDoors() {
+  if(!state.doorUndoRun)return;
+  state.projectBusy=true;$('#door-undo-accepted').disabled=true;
+  try{
+    const response=await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/door-detection-runs/${encodeURIComponent(state.doorUndoRun.run_id)}/undo`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_model_version:state.modelVersion})});
+    const result=await response.json();if(!response.ok)throw new Error(result.detail||'Не удалось отменить добавление дверей');
+    state.modelVersion=Number(result.model_version)||state.modelVersion;
+    state.geometry=result.geometry;state.savedGeometry=clone(state.geometry);setDirty(false);setDoorUndoRun(null);drawGeometry();showGeometryCard();
+    showToast(`Добавление отменено: удалено ${result.removed_count}, восстановлено ${result.restored_count}`);
+  }catch(error){showToast(error.message,true);}finally{state.projectBusy=false;$('#door-undo-accepted').disabled=false;}
 }
 
 async function activateManualDoor() {
@@ -1006,6 +1028,7 @@ function bindInterface() {
   $('#door-add-manual').addEventListener('click',activateManualDoor);
   $('#door-accept-candidates').addEventListener('click',()=>decideDoorCandidates('accepted'));
   $('#door-reject-candidates').addEventListener('click',()=>decideDoorCandidates('rejected'));
+  $('#door-undo-accepted').addEventListener('click',undoAcceptedDoors);
   const changeCamera = () => state.volume?.setCamera(Number($('#view-tilt').value), Number($('#view-rotation').value));
   $('#view-tilt').addEventListener('input', changeCamera);
   $('#view-rotation').addEventListener('input', changeCamera);

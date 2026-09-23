@@ -313,6 +313,7 @@ body.view-source #editor-hint { border-color: rgba(66,209,197,.5); color: var(--
 .door-recognition-toolbar button:hover, .door-recognition-toolbar button.is-active { border-color: var(--teal); background: rgba(66,209,197,.14); }
 .door-recognition-toolbar #door-accept-candidates { border-color: var(--teal); color: var(--teal-soft); }
 .door-recognition-toolbar #door-reject-candidates { border-color: rgba(244,189,92,.5); color: #ffdda3; }
+.door-recognition-toolbar #door-undo-accepted { border-color: rgba(244,189,92,.65); color: #ffdda3; }
 #door-candidate-count { align-self: center; color: var(--teal-soft); font-size: .72rem; white-space: nowrap; }
 @media (max-width: 1180px) { .door-recognition-toolbar { left: 14px; right: 14px; transform: none; max-width: none; flex-wrap: wrap; } }
 @media (max-width: 1100px) { .plan-panel__meta #source-label { display: none; } .view-switch button { font-size: 11px; padding: 7px; } }

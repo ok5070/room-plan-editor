@@ -9,14 +9,14 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&amp;family=Unbounded:wght@500;600&amp;display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=17" />
     <script src="https://pixijs.download/release/pixi.min.js" defer></script>
     <script src="/static/door-mount.js" defer></script>
     <script src="/static/door-template.js" defer></script>
     <script src="/static/plan-25d.js?v=10" defer></script>
     <script src="/static/centerline-pairs.js?v=10" defer></script>
     <script src="/static/door-editor.js" defer></script>
-    <script src="/static/app-v2.js?v=16" defer></script>
+    <script src="/static/app-v2.js?v=17" defer></script>
   </head>
   <body>
     <section class="cover" id="cover" aria-labelledby="cover-title">
@@ -236,6 +236,7 @@
               <button id="door-add-manual" type="button">Добавить дверь вручную</button>
               <button id="door-accept-candidates" type="button" hidden>Принять найденные</button>
               <button id="door-reject-candidates" type="button" hidden>Отклонить</button>
+              <button id="door-undo-accepted" type="button" hidden>Отменить добавление</button>
               <span id="door-candidate-count" aria-live="polite"></span>
             </div>
             <div class="canvas-controls" aria-label="Управление масштабом">
