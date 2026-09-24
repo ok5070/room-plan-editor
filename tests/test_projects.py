@@ -306,11 +306,22 @@ class ProjectsTest(unittest.TestCase):
         latest = main.latest_door_detection_run(project["id"])
         self.assertEqual(latest["run"]["run_id"], result["run"]["run_id"])
 
+        for invalid_selection in ([], ["door-candidate-from-another-run"]):
+            with self.assertRaises(HTTPException) as raised:
+                main.decide_door_detection_run(
+                    project["id"], result["run"]["run_id"],
+                    {"decision": "accepted", "expected_model_version": 0,
+                     "selected_candidate_ids": invalid_selection})
+            self.assertEqual(raised.exception.status_code, 422)
+
+        selected_id = result["run"]["candidates"][0]["candidate_id"]
         accepted = main.decide_door_detection_run(
             project["id"], result["run"]["run_id"],
-            {"decision": "accepted", "expected_model_version": 0})
-        self.assertEqual(accepted["accepted_count"], 2)
-        self.assertEqual(len(accepted["geometry"]["doors"]), 2)
+            {"decision": "accepted", "expected_model_version": 0,
+             "selected_candidate_ids": [selected_id]})
+        self.assertEqual(accepted["accepted_count"], 1)
+        self.assertEqual(accepted["run"]["excluded_count"], 1)
+        self.assertEqual(len(accepted["geometry"]["doors"]), 1)
         self.assertTrue(all(door["leafCount"] == 1 for door in accepted["geometry"]["doors"]))
         self.assertTrue(all(door["swing"] == "unknown" for door in accepted["geometry"]["doors"]))
         self.assertEqual(main.latest_door_detection_run(project["id"])["undo_run"]["run_id"],
@@ -319,7 +330,7 @@ class ProjectsTest(unittest.TestCase):
         reverted = main.undo_door_detection_run(
             project["id"], result["run"]["run_id"],
             {"expected_model_version": accepted["model_version"]})
-        self.assertEqual(reverted["removed_count"], 2)
+        self.assertEqual(reverted["removed_count"], 1)
         self.assertEqual(reverted["restored_count"], 0)
         self.assertEqual(reverted["geometry"], before)
         self.assertIsNone(main.latest_door_detection_run(project["id"])["undo_run"])

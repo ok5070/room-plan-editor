@@ -2040,6 +2040,23 @@ def decide_door_detection_run(project_id: str, run_id: str,
         if payload.get("expected_model_version") != record["model_version"]:
             raise HTTPException(409, "Рабочий план изменился. Запустите поиск по образцу ещё раз")
 
+        all_candidates = run.get("candidates", [])
+        selected_ids = payload.get("selected_candidate_ids")
+        if selected_ids is None:
+            selected_ids = [item.get("candidate_id") for item in all_candidates]
+        if not isinstance(selected_ids, list) or not selected_ids:
+            raise HTTPException(422, "Выберите хотя бы одну найденную дверь")
+        if any(not isinstance(candidate_id, str) for candidate_id in selected_ids):
+            raise HTTPException(422, "Некорректный список выбранных дверей")
+        if len(selected_ids) != len(set(selected_ids)):
+            raise HTTPException(422, "Список выбранных дверей содержит повторы")
+        candidate_ids = {item.get("candidate_id") for item in all_candidates}
+        if any(candidate_id not in candidate_ids for candidate_id in selected_ids):
+            raise HTTPException(422, "Выбранная дверь не относится к этому запуску")
+        selected_id_set = set(selected_ids)
+        selected_candidates = [item for item in all_candidates
+                               if item.get("candidate_id") in selected_id_set]
+
         doors = record["geometry"].setdefault("doors", [])
         existing_ids = {door["id"] for door in doors}
         accepted = 0
@@ -2048,7 +2065,7 @@ def decide_door_detection_run(project_id: str, run_id: str,
         created_ids: list[str] = []
         updated_before: dict[str, dict[str, Any]] = {}
         next_number = 1
-        for candidate in run.get("candidates", []):
+        for candidate in selected_candidates:
             target_id = candidate.get("target_door_id")
             target = next((door for door in doors if door.get("id") == target_id), None)
             if target is not None:
@@ -2100,6 +2117,10 @@ def decide_door_detection_run(project_id: str, run_id: str,
         record["model_version"] += 1
         run["status"] = "accepted" if not conflicts else "accepted_with_conflicts"
         run["accepted_count"] = accepted
+        run["excluded_count"] = len(all_candidates) - len(selected_candidates)
+        run["accepted_candidate_ids"] = selected_ids
+        run["excluded_candidate_ids"] = [item.get("candidate_id") for item in all_candidates
+                                          if item.get("candidate_id") not in selected_id_set]
         run["accepted_model_version"] = record["model_version"]
         run["conflicts"] = conflicts
         run["decided_at"] = utc_now()

@@ -16,7 +16,7 @@
     <script src="/static/plan-25d.js?v=10" defer></script>
     <script src="/static/centerline-pairs.js?v=10" defer></script>
     <script src="/static/door-editor.js" defer></script>
-    <script src="/static/app-v2.js?v=17" defer></script>
+    <script src="/static/app-v2.js?v=34" defer></script>
   </head>
   <body>
     <section class="cover" id="cover" aria-labelledby="cover-title">
@@ -130,15 +130,15 @@
               </label>
             </div>
             <label class="editor-option">
-              <span>Привязка к сетке 10 px</span>
-              <input id="snap-toggle" type="checkbox" checked />
+              <span>Привязка к сетке 10 ед. (по желанию)</span>
+              <input id="snap-toggle" type="checkbox" />
             </label>
             <label class="editor-option editor-option--range">
               <span>Прозрачность подложки</span>
               <input id="background-opacity" type="range" min="10" max="100" value="72" />
             </label>
             <button class="save-geometry" id="save-geometry" type="button" disabled>Сохранить геометрию</button>
-            <p class="editor-help">Стена/перегородка: две точки. Дверь или окно: нажмите рядом со стеной. Выбор: перетаскивание вдоль стены; Alt — перенос на другую стену; Delete — удаление. Пробел + перетаскивание — сдвиг всего плана. «Весь план» — центрирование.</p>
+              <p class="editor-help">Стена/перегородка: две точки. Дверь или окно: нажмите рядом со стеной. Выбор: дверь перетаскивается на ближайшую стену; окно переносится на другую стену с Alt. Delete — удаление. Пробел + перетаскивание — сдвиг всего плана.</p>
           </section>
 
           <section class="sidebar__section system-block" id="skud-equipment-section">
@@ -234,8 +234,10 @@
               </label>
               <button id="door-train-sample" type="button">Обучить по образцу</button>
               <button id="door-add-manual" type="button">Добавить дверь вручную</button>
+              <button id="door-select-all" type="button" hidden>Выбрать все</button>
+              <button id="door-select-none" type="button" hidden>Снять все</button>
               <button id="door-accept-candidates" type="button" hidden>Принять найденные</button>
-              <button id="door-reject-candidates" type="button" hidden>Отклонить</button>
+              <button id="door-reject-candidates" type="button" hidden>Отклонить весь запуск</button>
               <button id="door-undo-accepted" type="button" hidden>Отменить добавление</button>
               <span id="door-candidate-count" aria-live="polite"></span>
             </div>

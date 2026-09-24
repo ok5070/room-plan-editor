@@ -4,11 +4,11 @@ const state = {
   equipment: [], markers: [], equipmentLayer: null, cadPreview: null, cadPreviewMaster: null, cadLayer: null, gridLayer: null, geometryLayer: null, stagingLayer: null, recognitionLayer: null, draftLayer: null, backgroundSprite: null,
   scale: 1, minScale: 0.12, maxScale: 6,
   dragging: false, dragStart: null, worldStart: null,
-  editorEnabled: false, tool: "select", draftStart: null, selected: null, moving: null,
+  editorEnabled: false, tool: "select", draftStart: null, draftCurrent: null, selected: null, moving: null, rotating: null, resizingWall: null,
   history: [], future: [], dirty: false, equipmentDirty: false, savedGeometry: null, savedEquipment: null,
   viewMode: '2d', volume: null, stagingGeometry: null, audit: null, cadAppliedLayout: null, cadLayoutsCollapsed: false,
   modelVersion: 0, doorSampleMode: false, doorSampleStart: null, doorSampleCurrent: null,
-  doorDetectionRun: null, doorUndoRun: null, doorCandidates: [], manualDoorLeafCount: 1,
+  doorDetectionRun: null, doorUndoRun: null, doorCandidates: [], doorCandidateSelection: new Set(), manualDoorLeafCount: 1,
   projectId: new URLSearchParams(location.search).get('project') || 'initial',
 };
 
@@ -118,11 +118,42 @@ async function loadLatestDoorDetection() {
 function setDoorDetectionRun(run) {
   state.doorDetectionRun = run;
   state.doorCandidates = run?.candidates || [];
-  const count = state.doorCandidates.length;
-  $('#door-accept-candidates').hidden = !count;
-  $('#door-reject-candidates').hidden = !count;
-  $('#door-candidate-count').textContent = count ? `Найдено: ${count}` : '';
+  state.doorCandidateSelection = new Set(state.doorCandidates.map(candidate=>candidate.candidate_id));
+  updateDoorCandidateControls();
   drawDoorRecognition();
+}
+
+function updateDoorCandidateControls() {
+  const count=state.doorCandidates.length,selected=state.doorCandidateSelection.size;
+  ['door-select-all','door-select-none','door-accept-candidates','door-reject-candidates'].forEach(id=>{$('#'+id).hidden=!count;});
+  $('#door-accept-candidates').disabled=!selected;
+  $('#door-accept-candidates').textContent=selected?`Принять выбранные: ${selected}`:'Ничего не выбрано';
+  $('#door-candidate-count').textContent=count?`Найдено ${count} · выбрано ${selected} · исключено ${count-selected}`:'';
+}
+
+function setAllDoorCandidates(selected) {
+  state.doorCandidateSelection=new Set(selected?state.doorCandidates.map(candidate=>candidate.candidate_id):[]);
+  updateDoorCandidateControls();drawDoorRecognition();
+}
+
+function toggleDoorCandidate(point) {
+  let nearest=null;
+  state.doorCandidates.forEach(candidate=>{
+    const dx=point.x-candidate.x,dy=point.y-candidate.y,rotation=candidate.rotation||0;
+    const along=Math.abs(dx*Math.cos(rotation)+dy*Math.sin(rotation));
+    const across=Math.abs(-dx*Math.sin(rotation)+dy*Math.cos(rotation));
+    const padding=state.scale?12/state.scale:12;
+    if(along<=candidate.width/2+padding&&across<=Math.max(12,padding)){
+      const distance=Math.hypot(Math.max(0,along-candidate.width/2),across);
+      if(!nearest||distance<nearest.distance)nearest={candidate,distance};
+    }
+  });
+  if(!nearest)return false;
+  const id=nearest.candidate.candidate_id;
+  if(state.doorCandidateSelection.has(id))state.doorCandidateSelection.delete(id);else state.doorCandidateSelection.add(id);
+  updateDoorCandidateControls();drawDoorRecognition();
+  $('#editor-hint').textContent=state.doorCandidateSelection.has(id)?'Кандидат выбран':'Кандидат исключён';
+  return true;
 }
 
 function setDoorUndoRun(run) {
@@ -300,6 +331,8 @@ function drawCadPreview() {
 }
 
 function visualWallStrokeWidth(wall) { return Math.max(1.5, Math.min(4, (Number(wall.thickness) || 13) / 4)); }
+function screenSize(pixels) { return pixels / Math.max(Number(state.scale) || 1, 0.001); }
+function boundedSymbolLength(modelUnits, maxPixels) { return Math.min(Number(modelUnits) || 0, screenSize(maxPixels)); }
 
 function drawGeometry() {
   if (!state.geometryLayer) return;
@@ -308,10 +341,10 @@ function drawGeometry() {
     if (!layers[wall.type].visible) return;
     const selected = state.selected?.kind === "wall" && state.selected.id === wall.id;
     const g = new PIXI.Graphics();
-    g.moveTo(wall.x1, wall.y1).lineTo(wall.x2, wall.y2).stroke({ width: visualWallStrokeWidth(wall), color: selected ? 0xf4bd5c : wall.type === "partition" ? 0x169b91 : 0x243c63, alpha: 0.96 });
+    g.moveTo(wall.x1, wall.y1).lineTo(wall.x2, wall.y2).stroke({ width: screenSize(visualWallStrokeWidth(wall)), color: selected ? 0xf4bd5c : wall.type === "partition" ? 0x169b91 : 0x243c63, alpha: 0.96 });
     if (selected) {
-      g.circle(wall.x1, wall.y1, 9).fill({ color: 0xf4bd5c }).stroke({ width: 2, color: 0xffffff });
-      g.circle(wall.x2, wall.y2, 9).fill({ color: 0xf4bd5c }).stroke({ width: 2, color: 0xffffff });
+      g.circle(wall.x1, wall.y1, screenSize(9)).fill({ color: 0xf4bd5c }).stroke({ width: screenSize(2), color: 0xffffff });
+      g.circle(wall.x2, wall.y2, screenSize(9)).fill({ color: 0xf4bd5c }).stroke({ width: screenSize(2), color: 0xffffff });
     }
     state.geometryLayer.addChild(g);
   });
@@ -323,24 +356,33 @@ function drawGeometry() {
     holder.rotation = door.rotation || 0;
     holder.scale.y = door.openingSide === 1 ? -1 : 1;
     const g = new PIXI.Graphics();
-    const half = door.width / 2;
-    g.moveTo(-half, 0).lineTo(half, 0).stroke({ width: 18, color: 0xf4f5f3, alpha: 0.96 });
+    const openingHalf = door.width / 2;
+    const visualWidth = boundedSymbolLength(door.width, door.leafCount === 2 ? 52 : 36);
+    const half = visualWidth / 2;
+    g.moveTo(-openingHalf, 0).lineTo(openingHalf, 0).stroke({ width: screenSize(14), color: 0xf4f5f3, alpha: 0.96 });
     const doorColor = selected ? 0xf4bd5c : 0x176f9f;
     if (door.swing === 'unknown') {
-      g.moveTo(-half, -7).lineTo(-half, 7).moveTo(half, -7).lineTo(half, 7).stroke({ width: 3, color: doorColor });
+      g.moveTo(-openingHalf, 0).lineTo(openingHalf, 0).stroke({ width: screenSize(selected ? 4 : 3), color: doorColor, alpha: selected ? 0.98 : 0.82 });
     } else if (door.leafCount === 2) {
-      const leaf = door.width * 0.46;
-      g.moveTo(-half, 0).lineTo(-half, -leaf).stroke({ width: 4, color: doorColor });
-      g.moveTo(half, 0).lineTo(half, -leaf).stroke({ width: 4, color: doorColor });
-      g.moveTo(-half, -leaf).quadraticCurveTo(-door.width * 0.04, -leaf, -door.width * 0.04, 0).stroke({ width: 2, color: doorColor, alpha: 0.72 });
-      g.moveTo(half, -leaf).quadraticCurveTo(door.width * 0.04, -leaf, door.width * 0.04, 0).stroke({ width: 2, color: doorColor, alpha: 0.72 });
+      const leaf = visualWidth * 0.46;
+      g.moveTo(-half, 0).lineTo(-half, -leaf).stroke({ width: screenSize(4), color: doorColor });
+      g.moveTo(half, 0).lineTo(half, -leaf).stroke({ width: screenSize(4), color: doorColor });
+      g.moveTo(-half, -leaf).quadraticCurveTo(-visualWidth * 0.04, -leaf, -visualWidth * 0.04, 0).stroke({ width: screenSize(2), color: doorColor, alpha: 0.72 });
+      g.moveTo(half, -leaf).quadraticCurveTo(visualWidth * 0.04, -leaf, visualWidth * 0.04, 0).stroke({ width: screenSize(2), color: doorColor, alpha: 0.72 });
     } else {
       const hinge = door.swing === "right" ? half : -half;
-      const leafEnd = door.swing === "right" ? hinge - door.width * 0.82 : hinge + door.width * 0.82;
-      g.moveTo(hinge, 0).lineTo(hinge, -door.width * 0.82).stroke({ width: 4, color: doorColor });
-      g.moveTo(hinge, -door.width * 0.82).quadraticCurveTo(leafEnd, -door.width * 0.82, leafEnd, 0).stroke({ width: 2, color: doorColor, alpha: 0.72 });
+      const leafDepth = visualWidth * 0.82;
+      const leafEnd = door.swing === "right" ? hinge - leafDepth : hinge + leafDepth;
+      g.moveTo(hinge, 0).lineTo(hinge, -leafDepth).stroke({ width: screenSize(4), color: doorColor });
+      g.moveTo(hinge, -leafDepth).quadraticCurveTo(leafEnd, -leafDepth, leafEnd, 0).stroke({ width: screenSize(2), color: doorColor, alpha: 0.72 });
     }
-    g.circle(0, 0, selected ? 8 : 5).fill({ color: selected ? 0xf4bd5c : 0x168d8a }).stroke({ width: 2, color: 0xffffff });
+    if(selected && door.swing !== 'unknown') {
+      g.circle(0, 0, screenSize(4.5)).fill({ color: 0xf4bd5c }).stroke({ width: screenSize(1.25), color: 0xffffff });
+      const handleY=(door.openingSide===1?1:-1)*doorRotationHandleDistance(),padding=screenSize(6),frameHeight=screenSize(20);
+      g.roundRect(-half-padding,-frameHeight/2,visualWidth+padding*2,frameHeight,screenSize(4)).stroke({width:screenSize(1.5),color:0xf4bd5c,alpha:.95});
+      g.moveTo(0,0).lineTo(0,handleY).stroke({width:screenSize(1.5),color:0x16b8c4,alpha:.9});
+      g.circle(0,handleY,screenSize(5.5)).fill({color:0x16b8c4}).stroke({width:screenSize(1.5),color:0xffffff});
+    }
     holder.addChild(g);
     state.geometryLayer.addChild(holder);
   });
@@ -351,13 +393,15 @@ function drawGeometry() {
     holder.position.set(windowItem.x, windowItem.y);
     holder.rotation = windowItem.rotation || 0;
     const g = new PIXI.Graphics();
-    const half = windowItem.width / 2;
+    const openingHalf = windowItem.width / 2;
+    const half = boundedSymbolLength(windowItem.width, 48) / 2;
     const color = selected ? 0xf4bd5c : 0x42aee8;
-    g.moveTo(-half, 0).lineTo(half, 0).stroke({ width: 18, color: 0xf4f5f3, alpha: 0.96 });
-    g.moveTo(-half, -5).lineTo(half, -5).stroke({ width: 3, color });
-    g.moveTo(-half, 5).lineTo(half, 5).stroke({ width: 3, color });
-    g.moveTo(-half, -8).lineTo(-half, 8).moveTo(half, -8).lineTo(half, 8).stroke({ width: 3, color });
-    if (selected) g.circle(0, 0, 7).fill({ color: 0xf4bd5c }).stroke({ width: 2, color: 0xffffff });
+    const paneOffset=screenSize(5),cap=screenSize(8);
+    g.moveTo(-openingHalf, 0).lineTo(openingHalf, 0).stroke({ width: screenSize(14), color: 0xf4f5f3, alpha: 0.96 });
+    g.moveTo(-half, -paneOffset).lineTo(half, -paneOffset).stroke({ width: screenSize(3), color });
+    g.moveTo(-half, paneOffset).lineTo(half, paneOffset).stroke({ width: screenSize(3), color });
+    g.moveTo(-half, -cap).lineTo(-half, cap).moveTo(half, -cap).lineTo(half, cap).stroke({ width: screenSize(3), color });
+    if (selected) g.circle(0, 0, screenSize(7)).fill({ color: 0xf4bd5c }).stroke({ width: screenSize(2), color: 0xffffff });
     holder.addChild(g);
     state.geometryLayer.addChild(holder);
   });
@@ -375,20 +419,20 @@ function drawStagingGeometry() {
   state.stagingGeometry.walls.forEach((wall) => {
     const g = new PIXI.Graphics();
     const color = wall.type === 'partition' ? 0x38dbd0 : wall.reviewHint === 'thin_parallel_pair' ? 0xf4d06f : 0xff9f43;
-    g.moveTo(wall.x1, wall.y1).lineTo(wall.x2, wall.y2).stroke({ width: visualWallStrokeWidth(wall), color, alpha: 0.78, cap: 'round' });
+    g.moveTo(wall.x1, wall.y1).lineTo(wall.x2, wall.y2).stroke({ width: screenSize(visualWallStrokeWidth(wall)), color, alpha: 0.78, cap: 'round' });
     state.stagingLayer.addChild(g);
   });
   state.stagingGeometry.doors.forEach((door) => {
     const holder = new PIXI.Container(); holder.position.set(door.x, door.y); holder.rotation = door.rotation || 0;
     const g = new PIXI.Graphics(); const half = door.width / 2;
-    g.moveTo(-half, 0).lineTo(half, 0).stroke({ width: 22, color: 0xffe0a3, alpha: 0.9 });
-    g.moveTo(-half, -2).lineTo(half, -2).stroke({ width: 5, color: 0xff9f43, alpha: 0.95 });
+    g.moveTo(-half, 0).lineTo(half, 0).stroke({ width: screenSize(4), color: 0xff9f43, alpha: 0.95 });
     holder.addChild(g); state.stagingLayer.addChild(holder);
   });
   state.stagingGeometry.windows.forEach((windowItem) => {
     const holder = new PIXI.Container(); holder.position.set(windowItem.x, windowItem.y); holder.rotation = windowItem.rotation || 0;
     const g = new PIXI.Graphics(); const half = windowItem.width / 2;
-    g.moveTo(-half, -7).lineTo(half, -7).moveTo(-half, 7).lineTo(half, 7).stroke({ width: 5, color: 0x8ce8ff, alpha: 0.95 });
+    const offset=screenSize(7);
+    g.moveTo(-half, -offset).lineTo(half, -offset).moveTo(-half, offset).lineTo(half, offset).stroke({ width: screenSize(5), color: 0x8ce8ff, alpha: 0.95 });
     holder.addChild(g); state.stagingLayer.addChild(holder);
   });
 }
@@ -400,15 +444,14 @@ function drawDoorRecognition() {
     const holder = new PIXI.Container();
     holder.position.set(candidate.x, candidate.y); holder.rotation = candidate.rotation || 0;
     const g = new PIXI.Graphics(), half = candidate.width / 2;
-    g.moveTo(-half, -10).lineTo(-half, 10).moveTo(half, -10).lineTo(half, 10).stroke({width:4,color:0xd84ed8,alpha:.95});
-    g.moveTo(-half, 0).lineTo(half, 0).stroke({width:2,color:0xd84ed8,alpha:.72});
-    g.circle(0,0,4).fill({color:0xd84ed8}).stroke({width:1,color:0xffffff});
+    const selected=state.doorCandidateSelection.has(candidate.candidate_id),color=selected?0x35c995:0x87979b;
+    g.moveTo(-half, 0).lineTo(half, 0).stroke({width:screenSize(selected?4:3),color,alpha:selected ? 0.98 : 0.65});
     holder.addChild(g); state.recognitionLayer.addChild(holder);
   });
   if (state.doorSampleStart && state.doorSampleCurrent) {
     const minX=Math.min(state.doorSampleStart.x,state.doorSampleCurrent.x),minY=Math.min(state.doorSampleStart.y,state.doorSampleCurrent.y);
     const width=Math.abs(state.doorSampleCurrent.x-state.doorSampleStart.x),height=Math.abs(state.doorSampleCurrent.y-state.doorSampleStart.y);
-    const frame=new PIXI.Graphics().rect(minX,minY,width,height).fill({color:0x42d1c5,alpha:.08}).stroke({width:3,color:0x42d1c5,alpha:.95});
+    const frame=new PIXI.Graphics().rect(minX,minY,width,height).fill({color:0x42d1c5,alpha:.08}).stroke({width:screenSize(3),color:0x42d1c5,alpha:.95});
     state.recognitionLayer.addChild(frame);
   }
 }
@@ -416,6 +459,7 @@ function drawDoorRecognition() {
 function createMarker(item) {
   const marker = new PIXI.Container();
   marker.position.set(item.x, item.y);
+  marker.scale.set(screenSize(1));
   marker.label = item.type;
   const definition=equipmentCatalog[item.type]||{name:item.type,symbol:'•',color:0x6b7d82};
   const selected=state.selected?.kind==='equipment'&&state.selected.id===item.id;
@@ -447,6 +491,8 @@ function fitPlan() {
   state.world.scale.set(state.scale);
   state.world.position.set((viewWidth - width * state.scale) / 2, (viewHeight - height * state.scale) / 2);
   updateZoomLabel();
+  drawGeometry();drawEquipment();drawStagingGeometry();drawDoorRecognition();
+  if (state.draftStart && state.draftCurrent) drawDraft(state.draftCurrent);
 }
 
 function resizePlan() {
@@ -464,6 +510,8 @@ function zoomAt(factor, clientX, clientY) {
   const old = state.scale, next = Math.max(state.minScale, Math.min(state.maxScale, old * factor));
   const lx = (sx - state.world.x) / old, ly = (sy - state.world.y) / old;
   state.scale = next; state.world.scale.set(next); state.world.position.set(sx - lx * next, sy - ly * next); updateZoomLabel();
+  drawGeometry();drawEquipment();drawStagingGeometry();drawDoorRecognition();
+  if (state.draftStart && state.draftCurrent) drawDraft(state.draftCurrent);
 }
 
 function updateZoomLabel() { $("#zoom-label").textContent = `${Math.round(state.scale * 100)}%`; }
@@ -473,6 +521,20 @@ function worldPoint(event) {
   return snapPoint({ x: (event.clientX - rect.left - state.world.x) / state.scale, y: (event.clientY - rect.top - state.world.y) / state.scale });
 }
 
+function rawWorldPoint(event) {
+  const rect = state.app.canvas.getBoundingClientRect();
+  return { x: (event.clientX - rect.left - state.world.x) / state.scale, y: (event.clientY - rect.top - state.world.y) / state.scale };
+}
+
+function drawingPoint(event) {
+  let point=rawWorldPoint(event);
+  if(event.shiftKey&&state.draftStart) {
+    const dx=point.x-state.draftStart.x,dy=point.y-state.draftStart.y,distance=Math.hypot(dx,dy),angle=Math.round(Math.atan2(dy,dx)/(Math.PI/4))*(Math.PI/4);
+    point={x:state.draftStart.x+Math.cos(angle)*distance,y:state.draftStart.y+Math.sin(angle)*distance};
+  }
+  return snapPoint(point);
+}
+
 function projectToWall(point, wall) {
   const vx = wall.x2 - wall.x1, vy = wall.y2 - wall.y1, length2 = vx * vx + vy * vy || 1;
   const t = Math.max(0, Math.min(1, ((point.x - wall.x1) * vx + (point.y - wall.y1) * vy) / length2));
@@ -480,9 +542,64 @@ function projectToWall(point, wall) {
   return { x, y, t, distance: Math.hypot(point.x - x, point.y - y), rotation: Math.atan2(vy, vx) };
 }
 
+function wallRotation(wall) { return Math.atan2(wall.y2-wall.y1,wall.x2-wall.x1); }
+function normalizeRotation(value) { return Math.atan2(Math.sin(value),Math.cos(value)); }
+function doorRotationHandleDistance() { return screenSize(26); }
+
+function wallEndpointAt(point,wall) {
+  const tolerance=16/Math.max(state.scale||1,.001);
+  if(Math.hypot(point.x-wall.x1,point.y-wall.y1)<=tolerance)return 'start';
+  if(Math.hypot(point.x-wall.x2,point.y-wall.y2)<=tolerance)return 'end';
+  return null;
+}
+
+function repositionWallAttachments(wall,originalGeometry,originalEquipment) {
+  const originalWall=originalGeometry.walls.find(item=>item.id===wall.id);if(!originalWall)return;
+  const oldRotation=wallRotation(originalWall),newRotation=wallRotation(wall),rotationDelta=normalizeRotation(newRotation-oldRotation);
+  const length=Math.max(1,Math.hypot(wall.x2-wall.x1,wall.y2-wall.y1)),vx=wall.x2-wall.x1,vy=wall.y2-wall.y1;
+  const placeOpening=(item,original)=>{
+    const originalT=projectToWall(original,originalWall).t,margin=Math.min(.5,(Number(item.width)||0)/2/length),t=Math.max(margin,Math.min(1-margin,originalT));
+    item.x=wall.x1+t*vx;item.y=wall.y1+t*vy;item.rotation=normalizeRotation((original.rotation||oldRotation)+rotationDelta);
+  };
+  state.geometry.doors.filter(item=>item.wallId===wall.id).forEach(item=>placeOpening(item,originalGeometry.doors.find(entry=>entry.id===item.id)));
+  state.geometry.windows.filter(item=>item.wallId===wall.id).forEach(item=>placeOpening(item,originalGeometry.windows.find(entry=>entry.id===item.id)));
+  const doorIds=new Set(state.geometry.doors.filter(item=>item.wallId===wall.id).map(item=>item.id));
+  state.equipment.filter(item=>item.hostWallId===wall.id||doorIds.has(item.hostDoorId)).forEach(item=>{
+    const original=originalEquipment.find(entry=>entry.id===item.id);if(!original)return;
+    if(item.hostDoorId) {
+      const door=state.geometry.doors.find(entry=>entry.id===item.hostDoorId),originalDoor=originalGeometry.doors.find(entry=>entry.id===item.hostDoorId);if(!door||!originalDoor)return;
+      const angle=normalizeRotation((door.rotation||0)-(originalDoor.rotation||0)),dx=original.x-originalDoor.x,dy=original.y-originalDoor.y;
+      item.x=door.x+dx*Math.cos(angle)-dy*Math.sin(angle);item.y=door.y+dx*Math.sin(angle)+dy*Math.cos(angle);item.rotation=normalizeRotation((original.rotation||0)+angle);item.hostWallId=wall.id;
+    } else {
+      const projection=projectToWall(original,originalWall),across=-(original.x-projection.x)*Math.sin(oldRotation)+(original.y-projection.y)*Math.cos(oldRotation);
+      item.x=wall.x1+projection.t*vx-across*Math.sin(newRotation);item.y=wall.y1+projection.t*vy+across*Math.cos(newRotation);item.rotation=normalizeRotation((original.rotation||0)+rotationDelta);
+    }
+  });
+  if(state.equipment.some(item=>item.hostWallId===wall.id||doorIds.has(item.hostDoorId)))setEquipmentDirty(true);
+}
+
+function doorRotationHandlePoint(door) {
+  const distance=doorRotationHandleDistance(),side=door.openingSide===1?1:-1,rotation=door.rotation||0;
+  const localY=distance*side;
+  return {x:door.x-Math.sin(rotation)*localY,y:door.y+Math.cos(rotation)*localY};
+}
+
 function nearestWall(point, tolerance = Infinity) {
   let best = null;
   state.geometry.walls.forEach((wall) => { const p = projectToWall(point, wall); if (p.distance <= tolerance && (!best || p.distance < best.distance)) best = { wall, ...p }; });
+  return best;
+}
+
+function nearestOpeningElement(point, kinds = ['door','window']) {
+  const tolerance = 22 / state.scale; let best = null;
+  for (const kind of kinds) {
+    if (!editable(kind)) continue;
+    const items = kind === 'door' ? state.geometry.doors : state.geometry.windows;
+    items.forEach(item=>{const c=Math.cos(item.rotation||0),s=Math.sin(item.rotation||0),dx=point.x-item.x,dy=point.y-item.y;
+      const distance=Math.hypot(Math.max(0,Math.abs(dx*c+dy*s)-item.width/2),-dx*s+dy*c);
+      if(distance<=tolerance&&(!best||distance<best.distance)) best={kind,id:item.id,distance};
+    });
+  }
   return best;
 }
 
@@ -493,13 +610,7 @@ function nearestElement(point) {
     if(distance<=Math.max(tolerance,18/state.scale)&&(!best||distance<best.distance)) best={kind:'equipment',id:item.id,distance};
   });
   if(best)return best;
-  for (const [kind,items] of [['door',state.geometry.doors],['window',state.geometry.windows]]) {
-    if (!editable(kind)) continue;
-    items.forEach(item=>{const c=Math.cos(item.rotation||0),s=Math.sin(item.rotation||0),dx=point.x-item.x,dy=point.y-item.y;
-      const distance=Math.hypot(Math.max(0,Math.abs(dx*c+dy*s)-item.width/2),-dx*s+dy*c);
-      if(distance<=tolerance&&(!best||distance<best.distance)) best={kind,id:item.id,distance};
-    });
-  }
+  best = nearestOpeningElement(point);
   if (best) return best;
   state.geometry.walls.forEach((wall) => { if(!editable(wall.type)) return; const distance = projectToWall(point, wall).distance; if (distance <= tolerance && (!best || distance < best.distance)) best = { kind: "wall", id: wall.id, distance }; });
   return best;
@@ -681,12 +792,33 @@ function addWall(type, start, end) {
   state.draftStart = null; clearDraft(); drawGeometry();
 }
 
-function addDoor(point, swing = "right", leafCount = 1) {
+function addDoor(point, swing = "right", leafCount = 1, selectAfter = false) {
   const target = nearestWall(point, 45 / state.scale);
   if (!target) return showToast("Нажмите ближе к существующей стене", true);
   beginMutation();
-  state.geometry.doors.push({ id: nextId("D", state.geometry.doors), wallId: target.wall.id, x: target.x, y: target.y, width: leafCount === 2 ? 88 : 48, rotation: target.rotation, swing, leafCount, readerCount:1, accessPointId: null, accessPointCode: null });
-  drawGeometry();
+  const door={ id: nextId("D", state.geometry.doors), wallId: target.wall.id, x: target.x, y: target.y, width: leafCount === 2 ? 88 : 48, rotation: target.rotation, swing, leafCount, readerCount:1, accessPointId: null, accessPointCode: null };
+  state.geometry.doors.push(door);
+  if(selectAfter){state.selected={kind:'door',id:door.id};setTool('select');showToast('Дверь выбрана: перетащите её или поверните в карточке объекта');}
+  drawGeometry();showGeometryCard();
+}
+
+function adjustSelectedDoorRotation(action) {
+  if(state.selected?.kind!=='door'||!selectedEditable())return;
+  const door=state.geometry.doors.find(item=>item.id===state.selected.id);if(!door)return;
+  const host=state.geometry.walls.find(wall=>wall.id===door.wallId);
+  beginMutation();
+  if(action==='align-wall'&&host)door.rotation=wallRotation(host);
+  else door.rotation=normalizeRotation((door.rotation||0)+(action==='rotate-left'?-Math.PI/2:Math.PI/2));
+  const linked=state.equipment.filter(item=>item.hostDoorId===door.id);
+  linked.forEach(item=>item.rotation=door.rotation);
+  if(linked.length)setEquipmentDirty(true);
+  drawGeometry();drawEquipment();showGeometryCard();
+}
+
+function finishDoorAdjustment() {
+  if(state.selected?.kind!=='door')return;
+  state.selected=null;state.moving=null;state.rotating=null;state.resizingWall=null;drawGeometry();showGeometryCard();
+  showToast('Положение двери зафиксировано. Нажмите «Сохранить геометрию» для записи проекта.');
 }
 
 function addWindow(point) {
@@ -718,34 +850,94 @@ function deleteSelected() {
 function restoreSnapshot(saved){state.geometry=clone(saved.geometry);state.equipment=clone(saved.equipment);state.selected=null;refreshDirtyFromSaved();drawGeometry();drawEquipment();showGeometryCard();}
 function undo() { if (!state.history.length) return; state.future.push(snapshot()); restoreSnapshot(state.history.pop()); }
 function redo() { if (!state.future.length) return; state.history.push(snapshot()); restoreSnapshot(state.future.pop()); }
-function clearDraft() { if (state.draftLayer) state.draftLayer.removeChildren(); }
-function drawDraft(point) { clearDraft(); if (!state.draftStart) return; const g = new PIXI.Graphics(); g.moveTo(state.draftStart.x, state.draftStart.y).lineTo(point.x, point.y).stroke({ width: 5, color: 0xf4bd5c, alpha: 0.9 }); g.circle(state.draftStart.x, state.draftStart.y, 8).fill({ color: 0xf4bd5c }); state.draftLayer.addChild(g); }
+function clearDraft() { state.draftCurrent = null; if (state.draftLayer) state.draftLayer.removeChildren(); }
+function drawDraft(point) {
+  if (state.draftLayer) state.draftLayer.removeChildren();
+  state.draftCurrent = point;
+  if (!state.draftStart) return;
+  const g = new PIXI.Graphics(), markerRadius = screenSize(8);
+  g.moveTo(state.draftStart.x, state.draftStart.y).lineTo(point.x, point.y).stroke({ width: screenSize(5), color: 0xf4bd5c, alpha: 0.9 });
+  g.circle(state.draftStart.x, state.draftStart.y, markerRadius).fill({ color: 0xf4bd5c });
+  g.circle(point.x, point.y, markerRadius).fill({ color: 0xf4bd5c });
+  state.draftLayer.addChild(g);
+}
 
 function handleEditorDown(event) {
-  const point = worldPoint(event);
+  const point = ["wall", "partition"].includes(state.tool) ? drawingPoint(event) : worldPoint(event);
   const layer = state.tool.startsWith('door') ? 'door' : state.tool.startsWith('equipment:')?'controller':state.tool;
   if (layer !== 'select' && layers[layer] && !editable(layer)) return showToast('Сначала включите и разблокируйте слой');
+  if(state.tool==='select'&&state.selected?.kind==='door'&&selectedEditable()) {
+    const door=state.geometry.doors.find(item=>item.id===state.selected.id),handle=door&&doorRotationHandlePoint(door);
+    if(handle&&Math.hypot(point.x-handle.x,point.y-handle.y)<=22/state.scale) {
+      state.rotating={geometry:clone(state.geometry),equipment:clone(state.equipment),started:false};
+      state.moving=null;showToast('Поворот двери: тяните бирюзовую ручку вокруг центра');
+      return;
+    }
+  }
+  if(state.tool==='select'&&state.selected?.kind==='wall'&&selectedEditable()) {
+    const wall=state.geometry.walls.find(item=>item.id===state.selected.id),endpoint=wall&&wallEndpointAt(point,wall);
+    if(endpoint) {
+      state.resizingWall={endpoint,start:point,geometry:clone(state.geometry),equipment:clone(state.equipment),started:false};state.moving=null;
+      setEditorHint(endpoint==='start'?'Перемещайте начало стены':'Перемещайте конец стены');return;
+    }
+  }
+  if (state.tool.startsWith('door')) {
+    const existing = nearestOpeningElement(point, ['door']);
+    if (existing) {
+      state.selected = existing;
+      setTool('select');
+      if (selectedEditable()) state.moving = { start: point, geometry: clone(state.geometry), equipment:clone(state.equipment), started: false };
+      drawGeometry();drawEquipment();showGeometryCard();
+      showToast('Дверь захвачена: перетащите её мышкой или поверните в карточке');
+      return;
+    }
+  }
   if (["wall", "partition"].includes(state.tool)) {
-    if (!state.draftStart) { state.draftStart = point; drawDraft(point); setEditorHint("Укажите вторую точку"); }
+    if (!state.draftStart) { state.draftStart = point; drawDraft(point); setEditorHint("Двигайте мышь и щёлкните вторую точку · Shift — направление 45° · Esc — отмена"); }
     else { addWall(state.tool, state.draftStart, point); setTool(state.tool); }
     return;
   }
-  if (state.tool === "door-left") return addDoor(point, "left", 1);
-  if (state.tool === "door-right") return addDoor(point, "right", 1);
-  if (state.tool === "door-double") return addDoor(point, "right", 2);
-  if (state.tool === "door-manual") return addDoor(point, "unknown", state.manualDoorLeafCount);
+  if (state.tool === "door-left") return addDoor(point, "left", 1, true);
+  if (state.tool === "door-right") return addDoor(point, "right", 1, true);
+  if (state.tool === "door-double") return addDoor(point, "right", 2, true);
+  if (state.tool === "door-manual") return addDoor(point, "unknown", state.manualDoorLeafCount, true);
   if (state.tool === "window") return addWindow(point);
   if(state.tool.startsWith('equipment:'))return addEquipment(point,state.tool.split(':')[1]);
   state.selected = nearestElement(point);
-  if (selectedEditable()) state.moving = { start: point, geometry: clone(state.geometry), equipment:clone(state.equipment), started: false };
+  if (selectedEditable()) {
+    const wall=state.selected?.kind==='wall'&&state.geometry.walls.find(item=>item.id===state.selected.id),endpoint=wall&&wallEndpointAt(point,wall);
+    if(endpoint)state.resizingWall={endpoint,start:point,geometry:clone(state.geometry),equipment:clone(state.equipment),started:false};
+    else state.moving = { start: point, geometry: clone(state.geometry), equipment:clone(state.equipment), started: false };
+  }
   drawGeometry();drawEquipment(); showGeometryCard();
 }
 
 function handleEditorMove(event) {
-  const point = worldPoint(event); if (state.draftStart) drawDraft(point); if (!state.moving || !state.selected) return;
+  const point = state.rotating?rawWorldPoint(event):state.draftStart?drawingPoint(event):worldPoint(event); if (state.draftStart) drawDraft(point);
+  if(state.rotating&&state.selected?.kind==='door') {
+    const door=state.geometry.doors.find(item=>item.id===state.selected.id);if(!door)return;
+    if(!state.rotating.started){beginMutation();state.rotating.started=true;}
+    const pointerAngle=Math.atan2(point.y-door.y,point.x-door.x),side=door.openingSide===1?1:-1;
+    door.rotation=normalizeRotation(pointerAngle-(side*Math.PI/2));
+    const linked=state.equipment.filter(item=>item.hostDoorId===door.id);linked.forEach(item=>item.rotation=door.rotation);
+    if(linked.length)setEquipmentDirty(true);
+    drawGeometry();drawEquipment();showGeometryCard();return;
+  }
+  if(state.resizingWall&&state.selected?.kind==='wall') {
+    const original=state.resizingWall.geometry.walls.find(item=>item.id===state.selected.id),wall=state.geometry.walls.find(item=>item.id===state.selected.id);if(!original||!wall)return;
+    if(!state.resizingWall.started&&Math.hypot(point.x-state.resizingWall.start.x,point.y-state.resizingWall.start.y)<6/state.scale)return;
+    const fixed=state.resizingWall.endpoint==='start'?{x:original.x2,y:original.y2}:{x:original.x1,y:original.y1};
+    if(Math.hypot(point.x-fixed.x,point.y-fixed.y)<12)return;
+    if(!state.resizingWall.started){beginMutation();state.resizingWall.started=true;}
+    if(state.resizingWall.endpoint==='start')Object.assign(wall,{x1:point.x,y1:point.y,x2:original.x2,y2:original.y2});
+    else Object.assign(wall,{x1:original.x1,y1:original.y1,x2:point.x,y2:point.y});
+    repositionWallAttachments(wall,state.resizingWall.geometry,state.resizingWall.equipment);
+    drawGeometry();drawEquipment();showGeometryCard();return;
+  }
+  if (!state.moving || !state.selected) return;
   if(state.selected.kind==='equipment'&&state.equipment.find(e=>e.id===state.selected.id)?.doorMount)return;
   const dx = point.x - state.moving.start.x, dy = point.y - state.moving.start.y;
-  if (!state.moving.started && Math.hypot(dx, dy) < 2) return;
+  if (!state.moving.started && Math.hypot(dx, dy) < 6/state.scale) return;
   if (!state.moving.started) { beginMutation(state.selected.kind==='equipment'?'equipment':'geometry'); state.moving.started = true; }
   if(state.selected.kind==='equipment') {
     const original=state.moving.equipment.find(item=>item.id===state.selected.id),item=state.equipment.find(item=>item.id===state.selected.id);
@@ -764,7 +956,8 @@ function handleEditorMove(event) {
   } else {
     const item = state.selected.kind === "door" ? state.geometry.doors.find((entry) => entry.id === state.selected.id) : state.geometry.windows.find((entry) => entry.id === state.selected.id);
     const host = state.geometry.walls.find(w=>w.id===item.wallId);
-    const target = event.altKey ? nearestWall(point,45/state.scale) : host ? {wall:host,...projectToWall(point,host)} : null;
+    const nearby=state.selected.kind==='door'?nearestWall(point,80/state.scale):event.altKey?nearestWall(point,45/state.scale):null;
+    const target = nearby || (host ? {wall:host,...projectToWall(point,host)} : null);
     if (target) {
       const length=Math.hypot(target.wall.x2-target.wall.x1,target.wall.y2-target.wall.y1);
       const margin=Math.min(.5,item.width/2/(length||1));
@@ -772,14 +965,16 @@ function handleEditorMove(event) {
       target.x=target.wall.x1+t*(target.wall.x2-target.wall.x1); target.y=target.wall.y1+t*(target.wall.y2-target.wall.y1);
     }
     if (target) {
-      const oldX=item.x,oldY=item.y;Object.assign(item, { wallId: target.wall.id, x: target.x, y: target.y, rotation: target.rotation });
+      const oldX=item.x,oldY=item.y,oldHostRotation=host?wallRotation(host):item.rotation||0;
+      const rotationOffset=state.selected.kind==='door'?normalizeRotation((item.rotation||0)-oldHostRotation):0;
+      Object.assign(item, { wallId: target.wall.id, x: target.x, y: target.y, rotation: normalizeRotation(target.rotation+rotationOffset) });
       if(state.selected.kind==='door') {
         state.equipment.filter(entry=>entry.hostDoorId===item.id).forEach(entry=>{entry.x+=item.x-oldX;entry.y+=item.y-oldY;entry.hostWallId=item.wallId;entry.rotation=item.rotation;});
         if(state.equipment.some(entry=>entry.hostDoorId===item.id))setEquipmentDirty(true);
       }
     }
   }
-  drawGeometry();drawEquipment();
+  drawGeometry();drawEquipment();showGeometryCard();
 }
 
 function bindCanvasNavigation() {
@@ -791,32 +986,42 @@ function bindCanvasNavigation() {
       state.doorSampleStart = worldPoint(event); state.doorSampleCurrent = state.doorSampleStart;
       drawDoorRecognition(); return;
     }
+    if(state.viewMode==='source'&&event.button===0&&toggleDoorCandidate(worldPoint(event)))return;
     if (state.viewMode === '2d' && state.editorEnabled && state.tool!=='pan' && !state.spaceHeld && event.button!==1) return handleEditorDown(event);
     state.dragging = true; state.dragStart = { x: event.clientX, y: event.clientY }; state.worldStart = { x: state.world.x, y: state.world.y };
   });
   canvas.addEventListener("pointermove", (event) => {
-    const point = worldPoint(event); $("#cursor-coordinates").textContent = `${point.x.toFixed(0)} / ${point.y.toFixed(0)}`;
+    const point = state.draftStart?drawingPoint(event):worldPoint(event); $("#cursor-coordinates").textContent = `${point.x.toFixed(0)} / ${point.y.toFixed(0)}`;
     if (state.doorSampleStart) { state.doorSampleCurrent = point; drawDoorRecognition(); return; }
     if (state.editorEnabled && !state.dragging) return handleEditorMove(event);
     if (state.dragging) state.world.position.set(state.worldStart.x + event.clientX - state.dragStart.x, state.worldStart.y + event.clientY - state.dragStart.y);
   });
-  const stop = () => { state.dragging = false; state.moving = null; };
+  const stop = () => {
+    const finishedAdjustment=Boolean(state.rotating||state.resizingWall);
+    state.dragging = false; state.moving = null; state.rotating = null; state.resizingWall = null;
+    if(finishedAdjustment&&state.tool==='select')setEditorHint('Выберите или перетащите элемент');
+  };
   canvas.addEventListener("pointerup", () => {
     if (state.doorSampleStart) { const end=state.doorSampleCurrent; finishDoorSample(state.doorSampleStart,end); return; }
     stop();
   });
   canvas.addEventListener("pointercancel", () => { cancelDoorSampleSelection(); stop(); });
   canvas.addEventListener("pointerleave", () => { $("#cursor-coordinates").textContent = "— / —"; });
+  canvas.addEventListener('contextmenu',event=>{
+    if(state.viewMode==='2d'&&state.editorEnabled&&state.selected?.kind==='door'){
+      event.preventDefault();finishDoorAdjustment();
+    }
+  });
 }
 
 function setTool(tool) {
-  state.tool = tool; state.draftStart = null; state.moving = null; clearDraft();
+  state.tool = tool; state.draftStart = null; state.moving = null; state.rotating = null; state.resizingWall = null; clearDraft();
   document.querySelectorAll(".tool-button").forEach((button) => button.classList.toggle("is-active", button.dataset.tool === tool));
   document.querySelectorAll('.equipment-tool').forEach(button=>button.classList.toggle('is-active',tool===`equipment:${button.dataset.equipmentType}`));
   $("#floor-plan-container").dataset.tool = tool;
   if (tool==='pan') return setEditorHint('Зажмите левую кнопку и перемещайте весь план');
   if(tool.startsWith('equipment:'))return setEditorHint(`Размещение: ${equipmentCatalog[tool.split(':')[1]].name}`);
-  setEditorHint({ select: "Выберите или перетащите элемент", wall: "Стена: укажите первую точку", partition: "Перегородка: укажите первую точку", "door-left": "Левая дверь: нажмите рядом со стеной", "door-right": "Правая дверь: нажмите рядом со стеной", "door-double": "Двойная дверь: нажмите рядом со стеной", "door-manual": `${state.manualDoorLeafCount===2?'Двустворчатая':'Одностворчатая'} дверь: нажмите на стену`, window: "Окно: нажмите рядом со стеной" }[tool]);
+  setEditorHint({ select: "Выберите или перетащите элемент", wall: "Стена: щёлкните первую точку", partition: "Перегородка: щёлкните первую точку", "door-left": "Левая дверь: нажмите рядом со стеной", "door-right": "Правая дверь: нажмите рядом со стеной", "door-double": "Двойная дверь: нажмите рядом со стеной", "door-manual": `${state.manualDoorLeafCount===2?'Двустворчатая':'Одностворчатая'} дверь: нажмите на стену`, window: "Окно: нажмите рядом со стеной" }[tool]);
 }
 
 function cancelDoorSampleSelection() {
@@ -835,6 +1040,10 @@ async function finishDoorSample(start,end) {
   if(!end||Math.abs(end.x-start.x)<8||Math.abs(end.y-start.y)<8)return showToast('Выделите весь символ двери рамкой',true);
   const bounds={minX:Math.min(start.x,end.x),minY:Math.min(start.y,end.y),maxX:Math.max(start.x,end.x),maxY:Math.max(start.y,end.y)};
   const leafCount=Number($('#door-sample-type').value)===2?2:1;
+  await detectDoorPattern(bounds,leafCount);
+}
+
+async function detectDoorPattern(bounds,leafCount) {
   state.projectBusy=true;$('#door-train-sample').disabled=true;
   try{
     const response=await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/door-patterns/detect`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bounds,leaf_count:leafCount})});
@@ -845,11 +1054,22 @@ async function finishDoorSample(start,end) {
   }catch(error){showToast(error.message,true);}finally{state.projectBusy=false;$('#door-train-sample').disabled=false;drawDoorRecognition();}
 }
 
+async function trainFromSelectedDoor(door) {
+  const leafCount=door.leafCount===2?2:1;
+  const radius=Math.max(42,door.width*.95);
+  const bounds={minX:door.x-radius,minY:door.y-radius,maxX:door.x+radius,maxY:door.y+radius};
+  $('#door-sample-type').value=String(leafCount);
+  await setViewMode('source');
+  $('#editor-hint').textContent='Ищем обозначения по увеличенной области выбранной двери…';
+  await detectDoorPattern(bounds,leafCount);
+}
+
 async function decideDoorCandidates(decision) {
   if(!state.doorDetectionRun)return;
   state.projectBusy=true;
   try{
-    const response=await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/door-detection-runs/${encodeURIComponent(state.doorDetectionRun.run_id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision,expected_model_version:state.modelVersion})});
+    const selectedCandidateIds=decision==='accepted'?[...state.doorCandidateSelection]:undefined;
+    const response=await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/door-detection-runs/${encodeURIComponent(state.doorDetectionRun.run_id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision,expected_model_version:state.modelVersion,selected_candidate_ids:selectedCandidateIds})});
     const result=await response.json();if(!response.ok)throw new Error(result.detail||'Не удалось сохранить решение');
     state.modelVersion=Number(result.model_version)||state.modelVersion;
     if(decision==='accepted'){
@@ -885,7 +1105,7 @@ function toggleEditor() {
   $("#editor-toggle").setAttribute("aria-pressed", String(state.editorEnabled));
   $("#editor-section").classList.toggle("is-visible", state.editorEnabled);
   $("#floor-plan-container").classList.toggle("is-editing", state.editorEnabled);
-  if (!state.editorEnabled) { state.selected = null; state.draftStart = null; clearDraft(); drawGeometry();drawEquipment(); }
+  if (!state.editorEnabled) { state.selected = null; state.draftStart = null; state.rotating = null; state.resizingWall = null; clearDraft(); drawGeometry();drawEquipment(); }
   setTool("select"); setDirty(state.dirty);
 }
 
@@ -906,8 +1126,9 @@ function showGeometryCard() {
     return;
   }
   const type = state.selected.kind === "wall" ? item.type === "partition" ? "Перегородка" : "Стена" : state.selected.kind === "door" ? item.swing === 'unknown' ? "Дверной проём · петли не подтверждены" : item.leafCount === 2 ? "Двойная дверь" : "Одинарная дверь" : "Окно";
-  const details = state.selected.kind === "wall" ? `<dt>Начало</dt><dd>${item.x1.toFixed(0)} / ${item.y1.toFixed(0)}</dd><dt>Конец</dt><dd>${item.x2.toFixed(0)} / ${item.y2.toFixed(0)}</dd>` : `<dt>Стена</dt><dd>${escapeHtml(item.wallId)}</dd><dt>Центр</dt><dd>${item.x.toFixed(0)} / ${item.y.toFixed(0)}</dd>`;
-  const doorActions = state.selected.kind === "door" ? `<label class="card-field">Точка доступа<input data-door-field="accessPointCode" placeholder="ТД.1.1" value="${escapeHtml(item.accessPointCode||'')}"></label><label class="card-field">Считыватели<select data-door-field="readerCount"><option value="1">1 — вход по карте, выход по кнопке</option><option value="2" ${item.readerCount===2?'selected':''}>2 — считыватель с обеих сторон</option></select></label><div class="object-card__actions"><button type="button" data-door-action="flip">Петли: ${item.swing === "unknown" ? "не заданы" : item.swing === "left" ? "слева" : "справа"}</button><button type="button" data-door-action="side">Сменить сторону открытия (${item.openingSide === 1 ? 'Б' : 'А'})</button><button type="button" data-door-action="toggle-leaves">${item.leafCount === 2 ? "Сделать одинарной" : "Сделать двойной"}</button></div><p class="editor-help">${item.swing==='unknown'?'Проём найден автоматически. Нажмите «Петли», чтобы подтвердить направление открывания. ':''}Код вида ТД.1.1 определяет проектные обозначения приборов. Число считывателей учитывается в загрузке контроллера.</p>` : state.selected.kind === 'window' ? `<p class="editor-help">Ширина: ${item.width} ед. плана. Перетащите вдоль стены; Alt — перенос на другую стену.</p>` : "";
+  const angleDetails=state.selected.kind==='door'?`<dt>Угол</dt><dd>${Math.round(normalizeRotation(item.rotation||0)*180/Math.PI)}°</dd>`:'';
+  const details = state.selected.kind === "wall" ? `<dt>Начало</dt><dd>${item.x1.toFixed(0)} / ${item.y1.toFixed(0)}</dd><dt>Конец</dt><dd>${item.x2.toFixed(0)} / ${item.y2.toFixed(0)}</dd>` : `<dt>Стена</dt><dd>${escapeHtml(item.wallId)}</dd><dt>Центр</dt><dd>${item.x.toFixed(0)} / ${item.y.toFixed(0)}</dd>${angleDetails}`;
+  const doorActions = state.selected.kind === "door" ? `<label class="card-field">Точка доступа<input data-door-field="accessPointCode" placeholder="ТД.1.1" value="${escapeHtml(item.accessPointCode||'')}"></label><label class="card-field">Считыватели<select data-door-field="readerCount"><option value="1">1 — вход по карте, выход по кнопке</option><option value="2" ${item.readerCount===2?'selected':''}>2 — считыватель с обеих сторон</option></select></label><div class="object-card__actions"><button type="button" data-door-action="rotate-left">Повернуть ↺ 90°</button><button type="button" data-door-action="rotate-right">Повернуть ↻ 90°</button><button type="button" data-door-action="align-wall">Вдоль стены</button><button type="button" data-door-action="flip">Петли: ${item.swing === "unknown" ? "не заданы" : item.swing === "left" ? "слева" : "справа"}</button><button type="button" data-door-action="side">Сменить сторону открытия (${item.openingSide === 1 ? 'Б' : 'А'})</button><button type="button" data-door-action="toggle-leaves">${item.leafCount === 2 ? "Сделать одинарной" : "Сделать двойной"}</button><button type="button" data-door-action="train-area">Взять область двери за образец</button><button type="button" data-door-action="confirm-position">Зафиксировать положение</button></div><p class="editor-help">Оранжевый центр перемещает дверь; бирюзовая ручка свободно вращает её вокруг центра. Дверь привязывается к ближайшей стене. Правая кнопка мыши фиксирует положение. ${item.swing==='unknown'?'Нажмите «Петли», чтобы подтвердить направление открывания. ':''}Код вида ТД.1.1 определяет проектные обозначения приборов.</p>` : state.selected.kind === 'window' ? `<p class="editor-help">Ширина: ${item.width} ед. плана. Перетащите вдоль стены; Alt — перенос на другую стену.</p>` : state.selected.kind === 'wall' ? `<p class="editor-help">Тяните за оранжевые точки, чтобы изменить длину или угол. Перетаскивание самой линии перемещает стену целиком. Двери, окна и оборудование сохраняют привязку.</p>` : "";
   const status = state.selected.kind === 'door' && item.swing === 'unknown' ? 'требует проверки' : 'выбран';
   $("#object-card").innerHTML = `<div class="object-card__content"><div class="object-card__head"><h3>${escapeHtml(item.id)}</h3><span class="status-badge">${status}</span></div><dl><dt>Тип</dt><dd>${type}</dd>${details}</dl>${doorActions}</div>`;
   if(state.selected.kind==='door')$('#object-card .object-card__actions').insertAdjacentHTML('afterbegin','<button type="button" data-door-action="equipment">Оборудование двери · А / Б</button>');
@@ -951,6 +1172,7 @@ function normalizeCoordinates(items, bounds) {
 }
 
 function bindInterface() {
+  document.querySelectorAll('.canvas-controls button').forEach(button=>button.addEventListener('pointerdown',event=>event.stopPropagation()));
   $('#open-project').addEventListener('click',()=>openProject($('#project-list').value));
   $('#create-project').addEventListener('click',async()=>{
     if(state.projectBusy) return showToast('Дождитесь завершения загрузки файла');
@@ -1011,21 +1233,23 @@ function bindInterface() {
     const b=event.target.closest('button'); if(!b) return;
     if(b.dataset.visible) layers[b.dataset.visible].visible=!layers[b.dataset.visible].visible;
     if(b.dataset.lock) layers[b.dataset.lock].locked=!layers[b.dataset.lock].locked;
-    state.selected=null;state.moving=null;state.draftStart=null;clearDraft();renderLayers();drawGeometry();showGeometryCard();
+    state.selected=null;state.moving=null;state.resizingWall=null;state.draftStart=null;clearDraft();renderLayers();drawGeometry();showGeometryCard();
   });
   for(const [id,locked] of [['lock-all',true],['unlock-all',false]]) $('#'+id).addEventListener('click',()=>{
-    Object.values(layers).forEach(l=>l.locked=locked);state.selected=null;state.moving=null;state.draftStart=null;clearDraft();renderLayers();drawGeometry();showGeometryCard();
+    Object.values(layers).forEach(l=>l.locked=locked);state.selected=null;state.moving=null;state.resizingWall=null;state.draftStart=null;clearDraft();renderLayers();drawGeometry();showGeometryCard();
   });
   $('#volume-navigation').addEventListener('change',e=>{if(state.volume) state.volume.panMode=e.target.value==='pan';});
   window.addEventListener('keydown',e=>{if(e.code==='Space'&&!['INPUT','TEXTAREA','SELECT','BUTTON'].includes(e.target.tagName)){e.preventDefault();state.spaceHeld=true;if(state.volume)state.volume.spaceHeld=true;}});
   const releaseSpace=()=>{state.spaceHeld=false;if(state.volume)state.volume.spaceHeld=false;};
   window.addEventListener('keyup',e=>{if(e.code==='Space')releaseSpace();});
-  window.addEventListener('blur',()=>{releaseSpace();state.dragging=false;state.moving=null;});
+  window.addEventListener('blur',()=>{releaseSpace();state.dragging=false;state.moving=null;state.resizingWall=null;});
   $('#view-source-only').addEventListener('click', () => setViewMode('source'));
   $('#view-2d').addEventListener('click', () => setViewMode('2d'));
   $('#view-25d').addEventListener('click', () => setViewMode('25d'));
   $('#door-train-sample').addEventListener('click',()=>setDoorSampleMode(!state.doorSampleMode));
   $('#door-add-manual').addEventListener('click',activateManualDoor);
+  $('#door-select-all').addEventListener('click',()=>setAllDoorCandidates(true));
+  $('#door-select-none').addEventListener('click',()=>setAllDoorCandidates(false));
   $('#door-accept-candidates').addEventListener('click',()=>decideDoorCandidates('accepted'));
   $('#door-reject-candidates').addEventListener('click',()=>decideDoorCandidates('rejected'));
   $('#door-undo-accepted').addEventListener('click',undoAcceptedDoors);
@@ -1049,9 +1273,12 @@ function bindInterface() {
   $("#object-card").addEventListener("click", (event) => {
     const action = event.target.closest("[data-door-action]")?.dataset.doorAction;
     if (!action || state.selected?.kind !== "door" || !selectedEditable()) return;
-  const door = state.geometry.doors.find((item) => item.id === state.selected.id);
+    const door = state.geometry.doors.find((item) => item.id === state.selected.id);
     if (!door) return;
     if (action === 'equipment') return openDoorEditor(door.id);
+    if(action==='train-area')return trainFromSelectedDoor(door);
+    if(action==='rotate-left'||action==='rotate-right'||action==='align-wall')return adjustSelectedDoorRotation(action);
+    if(action==='confirm-position')return finishDoorAdjustment();
     beginMutation();
     if (action === "flip") door.swing = door.swing === "unknown" ? "left" : door.swing === "left" ? "right" : "left";
     if (action === "side") door.openingSide = door.openingSide === 1 ? -1 : 1;
@@ -1149,7 +1376,7 @@ async function setViewMode(mode) {
   const volume = mode === '25d';
   const sourceOnly = mode === 'source';
   setDoorSampleMode(false);
-  state.draftStart = null; state.moving = null; clearDraft();
+  state.draftStart = null; state.moving = null; state.rotating = null; state.resizingWall = null; clearDraft();
   document.body.classList.toggle('view-25d', volume);
   document.body.classList.toggle('view-source', sourceOnly);
   $('#view-25d-settings').hidden = !volume;
