@@ -9,6 +9,9 @@ const document = {querySelector(id) {
 },querySelectorAll(){return[];}};
 const context = vm.createContext({document, URLSearchParams, location:{search:''}, setTimeout(){}, clearTimeout(){}});
 const src = fs.readFileSync(path.join(__dirname,'../static/app-v2.js'),'utf8').replace(/start\(\);\s*$/, '');
+assert.doesNotMatch(src,/canvas\.addEventListener\(["']wheel["']/,'2D plan must not zoom from mouse wheel or trackpad scrolling');
+assert.match(src,/function workingPlanBounds\(\)/,'Working-plan bounds helper is missing');
+assert.match(src,/const bounds=workingPlanBounds\(\)/,'Base fit must use working architecture bounds');
 vm.runInContext(src + '\nthis.api={state,layers,nearestElement,selectedEditable,handleEditorDown,handleEditorMove,bindCanvasNavigation,addEquipment,addDoor,adjustSelectedDoorRotation,doorRotationHandlePoint,deleteSelected,normalizeAccessPointCode,projectEquipmentCode,normalizeImportedGeometry,importedGeometryTransform,drawStagingGeometry,drawDraft,drawingPoint,screenSize,visualWallStrokeWidth,doorReviewSummary,setDoorDetectionRun,setAllDoorCandidates,toggleDoorCandidate,undo,redo}; drawGeometry=()=>{};drawEquipment=()=>{};showGeometryCard=()=>{};drawDoorRecognition=()=>{};',context);
 const {state,layers,nearestElement,selectedEditable,handleEditorMove,bindCanvasNavigation,addEquipment,addDoor,adjustSelectedDoorRotation,deleteSelected,normalizeAccessPointCode,projectEquipmentCode,normalizeImportedGeometry,importedGeometryTransform,drawStagingGeometry,drawDraft,drawingPoint,screenSize,visualWallStrokeWidth,setDoorDetectionRun,setAllDoorCandidates,toggleDoorCandidate} = context.api;
 assert.deepEqual(JSON.parse(JSON.stringify(context.api.doorReviewSummary([{swing:'unknown'},{swing:'left'},{swing:'right'}]))),{total:3,pending:1,confirmed:2},'Door status distinguishes neutral openings from confirmed leaves');

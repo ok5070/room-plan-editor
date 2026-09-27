@@ -8,7 +8,7 @@ const state = {
   history: [], future: [], dirty: false, equipmentDirty: false, savedGeometry: null, savedEquipment: null,
   viewMode: '2d', volume: null, stagingGeometry: null, audit: null, cadAppliedLayout: null, cadLayoutsCollapsed: false,
   modelVersion: 0, doorSampleMode: false, doorSampleStart: null, doorSampleCurrent: null,
-  doorDetectionRun: null, doorUndoRun: null, doorCandidates: [], doorCandidateSelection: new Set(), manualDoorLeafCount: 1,
+  doorDetectionRun: null, doorUndoRun: null, doorCandidates: [], doorCandidateSelection: new Set(), doorScaleSelection: new Set(), manualDoorLeafCount: 1,
   projectId: new URLSearchParams(location.search).get('project') || 'initial',
 };
 
@@ -332,7 +332,11 @@ function drawCadPreview() {
 
 function visualWallStrokeWidth(wall) { return Math.max(1.5, Math.min(4, (Number(wall.thickness) || 13) / 4)); }
 function screenSize(pixels) { return pixels / Math.max(Number(state.scale) || 1, 0.001); }
-function boundedSymbolLength(modelUnits, maxPixels) { return Math.min(Number(modelUnits) || 0, screenSize(maxPixels)); }
+function boundedPlanSymbolLength(modelUnits, maxModelUnits) {
+  // Architectural marks belong to the plan, so they must scale with the
+  // world. Keep only a model-space cap for malformed/outlier source values.
+  return Math.min(Number(modelUnits) || 0, maxModelUnits);
+}
 
 function drawGeometry() {
   if (!state.geometryLayer) return;
@@ -351,30 +355,34 @@ function drawGeometry() {
   state.geometry.doors.forEach((door) => {
     if (!layers.door.visible) return;
     const selected = state.selected?.kind === "door" && state.selected.id === door.id;
+    const inScaleGroup = state.doorScaleSelection.has(door.id);
     const holder = new PIXI.Container();
     holder.position.set(door.x, door.y);
     holder.rotation = door.rotation || 0;
     holder.scale.y = door.openingSide === 1 ? -1 : 1;
     const g = new PIXI.Graphics();
     const openingHalf = door.width / 2;
-    const visualWidth = boundedSymbolLength(door.width, door.leafCount === 2 ? 52 : 36);
+    // Keep malformed/outlier marks bounded in plan units. The symbol itself
+    // must scale together with the plan; the real opening geometry is intact.
+    const visualWidth = boundedPlanSymbolLength(doorSymbolWidth(door), door.leafCount === 2 ? 72 : 48);
     const half = visualWidth / 2;
-    g.moveTo(-openingHalf, 0).lineTo(openingHalf, 0).stroke({ width: screenSize(14), color: 0xf4f5f3, alpha: 0.96 });
-    const doorColor = selected ? 0xf4bd5c : 0x176f9f;
+    const maskHalf = door.swing === 'unknown' ? openingHalf : half;
+    g.moveTo(-maskHalf, 0).lineTo(maskHalf, 0).stroke({ width: screenSize(12), color: 0xf4f5f3, alpha: 0.96 });
+    const doorColor = selected ? 0xf4bd5c : inScaleGroup ? 0x16b8c4 : 0x176f9f;
     if (door.swing === 'unknown') {
       g.moveTo(-openingHalf, 0).lineTo(openingHalf, 0).stroke({ width: screenSize(selected ? 4 : 3), color: doorColor, alpha: selected ? 0.98 : 0.82 });
     } else if (door.leafCount === 2) {
       const leaf = visualWidth * 0.46;
-      g.moveTo(-half, 0).lineTo(-half, -leaf).stroke({ width: screenSize(4), color: doorColor });
-      g.moveTo(half, 0).lineTo(half, -leaf).stroke({ width: screenSize(4), color: doorColor });
-      g.moveTo(-half, -leaf).quadraticCurveTo(-visualWidth * 0.04, -leaf, -visualWidth * 0.04, 0).stroke({ width: screenSize(2), color: doorColor, alpha: 0.72 });
-      g.moveTo(half, -leaf).quadraticCurveTo(visualWidth * 0.04, -leaf, visualWidth * 0.04, 0).stroke({ width: screenSize(2), color: doorColor, alpha: 0.72 });
+      g.moveTo(-half, 0).lineTo(-half, -leaf).stroke({ width: screenSize(2.25), color: doorColor });
+      g.moveTo(half, 0).lineTo(half, -leaf).stroke({ width: screenSize(2.25), color: doorColor });
+      g.moveTo(-half, -leaf).quadraticCurveTo(-visualWidth * 0.04, -leaf, -visualWidth * 0.04, 0).stroke({ width: screenSize(1.25), color: doorColor, alpha: 0.72 });
+      g.moveTo(half, -leaf).quadraticCurveTo(visualWidth * 0.04, -leaf, visualWidth * 0.04, 0).stroke({ width: screenSize(1.25), color: doorColor, alpha: 0.72 });
     } else {
       const hinge = door.swing === "right" ? half : -half;
       const leafDepth = visualWidth * 0.82;
       const leafEnd = door.swing === "right" ? hinge - leafDepth : hinge + leafDepth;
-      g.moveTo(hinge, 0).lineTo(hinge, -leafDepth).stroke({ width: screenSize(4), color: doorColor });
-      g.moveTo(hinge, -leafDepth).quadraticCurveTo(leafEnd, -leafDepth, leafEnd, 0).stroke({ width: screenSize(2), color: doorColor, alpha: 0.72 });
+      g.moveTo(hinge, 0).lineTo(hinge, -leafDepth).stroke({ width: screenSize(2.25), color: doorColor });
+      g.moveTo(hinge, -leafDepth).quadraticCurveTo(leafEnd, -leafDepth, leafEnd, 0).stroke({ width: screenSize(1.25), color: doorColor, alpha: 0.72 });
     }
     if(selected && door.swing !== 'unknown') {
       g.circle(0, 0, screenSize(4.5)).fill({ color: 0xf4bd5c }).stroke({ width: screenSize(1.25), color: 0xffffff });
@@ -383,6 +391,7 @@ function drawGeometry() {
       g.moveTo(0,0).lineTo(0,handleY).stroke({width:screenSize(1.5),color:0x16b8c4,alpha:.9});
       g.circle(0,handleY,screenSize(5.5)).fill({color:0x16b8c4}).stroke({width:screenSize(1.5),color:0xffffff});
     }
+    if(inScaleGroup && !selected) g.circle(0, 0, screenSize(6)).stroke({width:screenSize(2), color:0x16b8c4, alpha:.95});
     holder.addChild(g);
     state.geometryLayer.addChild(holder);
   });
@@ -393,11 +402,10 @@ function drawGeometry() {
     holder.position.set(windowItem.x, windowItem.y);
     holder.rotation = windowItem.rotation || 0;
     const g = new PIXI.Graphics();
-    const openingHalf = windowItem.width / 2;
-    const half = boundedSymbolLength(windowItem.width, 48) / 2;
+    const half = boundedPlanSymbolLength(windowItem.width, 64) / 2;
     const color = selected ? 0xf4bd5c : 0x42aee8;
     const paneOffset=screenSize(5),cap=screenSize(8);
-    g.moveTo(-openingHalf, 0).lineTo(openingHalf, 0).stroke({ width: screenSize(14), color: 0xf4f5f3, alpha: 0.96 });
+    g.moveTo(-half, 0).lineTo(half, 0).stroke({ width: screenSize(12), color: 0xf4f5f3, alpha: 0.96 });
     g.moveTo(-half, -paneOffset).lineTo(half, -paneOffset).stroke({ width: screenSize(3), color });
     g.moveTo(-half, paneOffset).lineTo(half, paneOffset).stroke({ width: screenSize(3), color });
     g.moveTo(-half, -cap).lineTo(-half, cap).moveTo(half, -cap).lineTo(half, cap).stroke({ width: screenSize(3), color });
@@ -482,14 +490,32 @@ function drawEquipment() {
   updateVisibleCount();
 }
 
+function workingPlanBounds() {
+  const points=[];
+  state.geometry?.walls?.forEach(wall=>points.push([wall.x1,wall.y1],[wall.x2,wall.y2]));
+  [...(state.geometry?.doors||[]),...(state.geometry?.windows||[])].forEach(item=>{
+    const radius=Math.max(12,(Number(item.width)||0)/2);
+    points.push([item.x-radius,item.y-radius],[item.x+radius,item.y+radius]);
+  });
+  state.equipment?.forEach(item=>points.push([item.x,item.y]));
+  if(points.length<2) {
+    const {width,height}=state.project.floorPlan;
+    return {minX:0,minY:0,maxX:width,maxY:height};
+  }
+  const xs=points.map(point=>point[0]),ys=points.map(point=>point[1]);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const padding=Math.max(24,Math.min(maxX-minX,maxY-minY)*.06);
+  return {minX:minX-padding,minY:minY-padding,maxX:maxX+padding,maxY:maxY+padding};
+}
+
 function fitPlan() {
   if (state.viewMode === '25d') return state.volume?.fit();
   if (!state.app || !state.project) return;
-  const { width, height } = state.project.floorPlan;
+  const bounds=workingPlanBounds(),width=Math.max(1,bounds.maxX-bounds.minX),height=Math.max(1,bounds.maxY-bounds.minY);
   const viewWidth = state.app.screen.width, viewHeight = state.app.screen.height;
-  state.scale = Math.max(state.minScale, Math.min((viewWidth - 70) / width, (viewHeight - 70) / height));
+  state.scale = Math.max(state.minScale,Math.min(state.maxScale,(viewWidth-90)/width,(viewHeight-90)/height));
   state.world.scale.set(state.scale);
-  state.world.position.set((viewWidth - width * state.scale) / 2, (viewHeight - height * state.scale) / 2);
+  state.world.position.set((viewWidth-width*state.scale)/2-bounds.minX*state.scale,(viewHeight-height*state.scale)/2-bounds.minY*state.scale);
   updateZoomLabel();
   drawGeometry();drawEquipment();drawStagingGeometry();drawDoorRecognition();
   if (state.draftStart && state.draftCurrent) drawDraft(state.draftCurrent);
@@ -796,7 +822,7 @@ function addDoor(point, swing = "right", leafCount = 1, selectAfter = false) {
   const target = nearestWall(point, 45 / state.scale);
   if (!target) return showToast("Нажмите ближе к существующей стене", true);
   beginMutation();
-  const door={ id: nextId("D", state.geometry.doors), wallId: target.wall.id, x: target.x, y: target.y, width: leafCount === 2 ? 88 : 48, rotation: target.rotation, swing, leafCount, readerCount:1, accessPointId: null, accessPointCode: null };
+  const door={ id: nextId("D", state.geometry.doors), wallId: target.wall.id, x: target.x, y: target.y, width: leafCount === 2 ? 88 : 48, symbolWidth: leafCount === 2 ? 44 : 30, rotation: target.rotation, swing, leafCount, readerCount:1, accessPointId: null, accessPointCode: null, symbolScaleLocked:false };
   state.geometry.doors.push(door);
   if(selectAfter){state.selected={kind:'door',id:door.id};setTool('select');showToast('Дверь выбрана: перетащите её или поверните в карточке объекта');}
   drawGeometry();showGeometryCard();
@@ -819,6 +845,53 @@ function finishDoorAdjustment() {
   if(state.selected?.kind!=='door')return;
   state.selected=null;state.moving=null;state.rotating=null;state.resizingWall=null;drawGeometry();showGeometryCard();
   showToast('Положение двери зафиксировано. Нажмите «Сохранить геометрию» для записи проекта.');
+}
+
+function doorSymbolWidth(door) { return Math.max(8, Math.min(120, Number(door.symbolWidth) || (door.leafCount === 2 ? 44 : 30))); }
+
+function updateDoorScaleGroupUI() {
+  const available = new Set(state.geometry.doors.map(item => item.id));
+  for (const id of [...state.doorScaleSelection]) if (!available.has(id)) state.doorScaleSelection.delete(id);
+  const count = state.doorScaleSelection.size;
+  const doorSelected = state.selected?.kind === 'door';
+  const tools = $('#door-scale-tools');
+  const currentDoor = doorSelected ? state.geometry.doors.find(item => item.id === state.selected.id) : null;
+  if (tools) tools.hidden = !doorSelected && !count;
+  const status = $('#door-scale-group-status');
+  if (status) status.textContent = `Дверей в группе: ${count}`;
+  const input = $('#door-scale-symbol-width');
+  if (input && currentDoor) { input.value = String(Math.round(doorSymbolWidth(currentDoor))); input.disabled = Boolean(currentDoor.symbolScaleLocked); }
+  const lock = $('#door-scale-lock');
+  if (lock) lock.textContent = currentDoor?.symbolScaleLocked ? 'Изменить масштаб' : 'Зафиксировать';
+  const add = $('#door-scale-add');
+  if (add) { const inGroup = currentDoor && state.doorScaleSelection.has(currentDoor.id); add.textContent = inGroup ? 'Убрать из группы' : 'В группу'; add.title = inGroup ? 'Убрать текущую дверь из группы масштаба' : 'Добавить текущую дверь в группу масштаба'; }
+  const selected = $('#door-scale-apply-selected'), all = $('#door-scale-apply-all'), clear = $('#door-scale-clear');
+  if (selected) selected.disabled = !count || !doorSelected;
+  if (all) all.disabled = !doorSelected || !state.geometry.doors.length;
+  if (clear) clear.disabled = !count;
+}
+
+function clearDoorScaleSelection() {
+  state.doorScaleSelection.clear();
+  updateDoorScaleGroupUI();
+  drawGeometry();
+  showGeometryCard();
+}
+
+function applyDoorScale(targetIds) {
+  if (state.selected?.kind !== 'door' || !selectedEditable()) return;
+  const source = state.geometry.doors.find(item => item.id === state.selected.id);
+  if (!source) return;
+  const available = new Set(state.geometry.doors.map(item => item.id));
+  const ids = targetIds === 'all' ? [...available] : [...state.doorScaleSelection].filter(id => available.has(id));
+  if (!ids.length) return showToast('Добавьте двери в группу масштаба', true);
+  const width = doorSymbolWidth(source);
+  beginMutation();
+  state.geometry.doors.forEach(door => { if (ids.includes(door.id)) { door.symbolWidth = width; door.symbolScaleLocked = true; } });
+  state.doorScaleSelection.clear();
+  updateDoorScaleGroupUI();
+  drawGeometry(); showGeometryCard();
+  showToast(`Масштаб ${width} ед. применён к ${ids.length} двер${ids.length === 1 ? 'и' : 'ям'}`);
 }
 
 function addWindow(point) {
@@ -979,7 +1052,6 @@ function handleEditorMove(event) {
 
 function bindCanvasNavigation() {
   const canvas = state.app.canvas;
-  canvas.addEventListener("wheel", (event) => { event.preventDefault(); zoomAt(event.deltaY < 0 ? 1.12 : 0.89, event.clientX, event.clientY); }, { passive: false });
   canvas.addEventListener("pointerdown", (event) => {
     canvas.setPointerCapture(event.pointerId);
     if (state.viewMode === 'source' && state.doorSampleMode && event.button === 0) {
@@ -1110,6 +1182,7 @@ function toggleEditor() {
 }
 
 function showGeometryCard() {
+  updateDoorScaleGroupUI();
   if (!state.selected) { $("#object-card").innerHTML = '<div class="object-card__empty"><span class="crosshair" aria-hidden="true"></span><p>Выберите объект на плане</p></div>'; return; }
   const item = state.selected.kind === "wall" ? state.geometry.walls.find((x) => x.id === state.selected.id) : state.selected.kind === "door" ? state.geometry.doors.find((x) => x.id === state.selected.id) : state.selected.kind==='window' ? state.geometry.windows.find((x) => x.id === state.selected.id) : state.equipment.find(x=>x.id===state.selected.id);
   if (!item) return;
@@ -1128,7 +1201,7 @@ function showGeometryCard() {
   const type = state.selected.kind === "wall" ? item.type === "partition" ? "Перегородка" : "Стена" : state.selected.kind === "door" ? item.swing === 'unknown' ? "Дверной проём · петли не подтверждены" : item.leafCount === 2 ? "Двойная дверь" : "Одинарная дверь" : "Окно";
   const angleDetails=state.selected.kind==='door'?`<dt>Угол</dt><dd>${Math.round(normalizeRotation(item.rotation||0)*180/Math.PI)}°</dd>`:'';
   const details = state.selected.kind === "wall" ? `<dt>Начало</dt><dd>${item.x1.toFixed(0)} / ${item.y1.toFixed(0)}</dd><dt>Конец</dt><dd>${item.x2.toFixed(0)} / ${item.y2.toFixed(0)}</dd>` : `<dt>Стена</dt><dd>${escapeHtml(item.wallId)}</dd><dt>Центр</dt><dd>${item.x.toFixed(0)} / ${item.y.toFixed(0)}</dd>${angleDetails}`;
-  const doorActions = state.selected.kind === "door" ? `<label class="card-field">Точка доступа<input data-door-field="accessPointCode" placeholder="ТД.1.1" value="${escapeHtml(item.accessPointCode||'')}"></label><label class="card-field">Считыватели<select data-door-field="readerCount"><option value="1">1 — вход по карте, выход по кнопке</option><option value="2" ${item.readerCount===2?'selected':''}>2 — считыватель с обеих сторон</option></select></label><div class="object-card__actions"><button type="button" data-door-action="rotate-left">Повернуть ↺ 90°</button><button type="button" data-door-action="rotate-right">Повернуть ↻ 90°</button><button type="button" data-door-action="align-wall">Вдоль стены</button><button type="button" data-door-action="flip">Петли: ${item.swing === "unknown" ? "не заданы" : item.swing === "left" ? "слева" : "справа"}</button><button type="button" data-door-action="side">Сменить сторону открытия (${item.openingSide === 1 ? 'Б' : 'А'})</button><button type="button" data-door-action="toggle-leaves">${item.leafCount === 2 ? "Сделать одинарной" : "Сделать двойной"}</button><button type="button" data-door-action="train-area">Взять область двери за образец</button><button type="button" data-door-action="confirm-position">Зафиксировать положение</button></div><p class="editor-help">Оранжевый центр перемещает дверь; бирюзовая ручка свободно вращает её вокруг центра. Дверь привязывается к ближайшей стене. Правая кнопка мыши фиксирует положение. ${item.swing==='unknown'?'Нажмите «Петли», чтобы подтвердить направление открывания. ':''}Код вида ТД.1.1 определяет проектные обозначения приборов.</p>` : state.selected.kind === 'window' ? `<p class="editor-help">Ширина: ${item.width} ед. плана. Перетащите вдоль стены; Alt — перенос на другую стену.</p>` : state.selected.kind === 'wall' ? `<p class="editor-help">Тяните за оранжевые точки, чтобы изменить длину или угол. Перетаскивание самой линии перемещает стену целиком. Двери, окна и оборудование сохраняют привязку.</p>` : "";
+  const doorActions = state.selected.kind === "door" ? `<label class="card-field">Точка доступа<input data-door-field="accessPointCode" placeholder="ТД.1.1" value="${escapeHtml(item.accessPointCode||'')}"></label><label class="card-field">Считыватели<select data-door-field="readerCount"><option value="1">1 — вход по карте, выход по кнопке</option><option value="2" ${item.readerCount===2?'selected':''}>2 — считыватель с обеих сторон</option></select></label><div class="object-card__actions"><button type="button" data-door-action="rotate-left">Повернуть ↺ 90°</button><button type="button" data-door-action="rotate-right">Повернуть ↻ 90°</button><button type="button" data-door-action="align-wall">Вдоль стены</button><button type="button" data-door-action="flip">Петли: ${item.swing === "unknown" ? "не заданы" : item.swing === "left" ? "слева" : "справа"}</button><button type="button" data-door-action="side">Сменить сторону открытия (${item.openingSide === 1 ? 'Б' : 'А'})</button><button type="button" data-door-action="toggle-leaves">${item.leafCount === 2 ? "Сделать одинарной" : "Сделать двойной"}</button><button type="button" data-door-action="train-area">Взять область двери за образец</button><button type="button" data-door-action="confirm-position">Зафиксировать положение</button></div><p class="editor-help">Масштаб двери настраивается в верхней панели над планом. Там же можно добавить дверь в группу и применить её размер к выбранным дверям.</p>` : state.selected.kind === 'window' ? `<p class="editor-help">Ширина: ${item.width} ед. плана. Перетащите вдоль стены; Alt — перенос на другую стену.</p>` : state.selected.kind === 'wall' ? `<p class="editor-help">Тяните за оранжевые точки, чтобы изменить длину или угол. Перетаскивание самой линии перемещает стену целиком. Двери, окна и оборудование сохраняют привязку.</p>` : "";
   const status = state.selected.kind === 'door' && item.swing === 'unknown' ? 'требует проверки' : 'выбран';
   $("#object-card").innerHTML = `<div class="object-card__content"><div class="object-card__head"><h3>${escapeHtml(item.id)}</h3><span class="status-badge">${status}</span></div><dl><dt>Тип</dt><dd>${type}</dd>${details}</dl>${doorActions}</div>`;
   if(state.selected.kind==='door')$('#object-card .object-card__actions').insertAdjacentHTML('afterbegin','<button type="button" data-door-action="equipment">Оборудование двери · А / Б</button>');
@@ -1270,6 +1343,26 @@ function bindInterface() {
     setTool(`equipment:${button.dataset.equipmentType}`);
   }));
   $("#delete-element").addEventListener("click", deleteSelected); $("#undo-edit").addEventListener("click", undo); $("#redo-edit").addEventListener("click", redo);
+  $('#door-scale-apply-selected').addEventListener('click',()=>applyDoorScale('selected'));
+  $('#door-scale-apply-all').addEventListener('click',()=>applyDoorScale('all'));
+  $('#door-scale-clear').addEventListener('click',clearDoorScaleSelection);
+  $('#door-scale-symbol-width').addEventListener('change',event=>{
+    if(state.selected?.kind!=='door'||!selectedEditable())return;
+    const door=state.geometry.doors.find(item=>item.id===state.selected.id);if(!door)return;
+    const next=Math.max(8,Math.min(120,Number(event.target.value)||30));
+    beginMutation();door.symbolWidth=next;drawGeometry();showGeometryCard();
+  });
+  $('#door-scale-lock').addEventListener('click',()=>{
+    if(state.selected?.kind!=='door'||!selectedEditable())return;
+    const door=state.geometry.doors.find(item=>item.id===state.selected.id);if(!door)return;
+    beginMutation();door.symbolScaleLocked=!door.symbolScaleLocked;drawGeometry();showGeometryCard();
+  });
+  $('#door-scale-add').addEventListener('click',()=>{
+    if(state.selected?.kind!=='door'||!selectedEditable())return;
+    const id=state.selected.id;
+    if(state.doorScaleSelection.has(id))state.doorScaleSelection.delete(id);else state.doorScaleSelection.add(id);
+    updateDoorScaleGroupUI();drawGeometry();showGeometryCard();
+  });
   $("#object-card").addEventListener("click", (event) => {
     const action = event.target.closest("[data-door-action]")?.dataset.doorAction;
     if (!action || state.selected?.kind !== "door" || !selectedEditable()) return;
@@ -1277,18 +1370,24 @@ function bindInterface() {
     if (!door) return;
     if (action === 'equipment') return openDoorEditor(door.id);
     if(action==='train-area')return trainFromSelectedDoor(door);
+    if(action==='lock-scale'){beginMutation();door.symbolScaleLocked=!door.symbolScaleLocked;drawGeometry();showGeometryCard();return;}
+    if(action==='toggle-scale-selection'){if(state.doorScaleSelection.has(door.id))state.doorScaleSelection.delete(door.id);else state.doorScaleSelection.add(door.id);updateDoorScaleGroupUI();drawGeometry();showGeometryCard();return;}
     if(action==='rotate-left'||action==='rotate-right'||action==='align-wall')return adjustSelectedDoorRotation(action);
     if(action==='confirm-position')return finishDoorAdjustment();
     beginMutation();
     if (action === "flip") door.swing = door.swing === "unknown" ? "left" : door.swing === "left" ? "right" : "left";
     if (action === "side") door.openingSide = door.openingSide === 1 ? -1 : 1;
-    if (action === "toggle-leaves") { door.leafCount = door.leafCount === 2 ? 1 : 2; door.width = door.leafCount === 2 ? Math.max(88, door.width) : Math.min(48, door.width); }
+    if (action === "toggle-leaves") { door.leafCount = door.leafCount === 2 ? 1 : 2; door.width = door.leafCount === 2 ? Math.max(88, door.width) : Math.min(48, door.width); door.symbolWidth = door.leafCount === 2 ? Math.max(44, door.symbolWidth || 0) : Math.min(30, door.symbolWidth || 30); }
     drawGeometry(); showGeometryCard();
   });
   $('#object-card').addEventListener('change',event=>{
     const doorField=event.target.dataset.doorField;
     if(doorField&&state.selected?.kind==='door'&&selectedEditable()){
       const door=state.geometry.doors.find(entry=>entry.id===state.selected.id);if(!door)return;
+      if(doorField==='symbolWidth'){
+        const next=Math.max(8,Math.min(120,Number(event.target.value)||30));
+        beginMutation();door.symbolWidth=next;drawGeometry();showGeometryCard();return;
+      }
       if(doorField==='readerCount'){
         const next=Number(event.target.value)===2?2:1,controllers=state.equipment.filter(item=>item.type==='controller'&&(item.servedDoorIds||[]).includes(door.id));
         if(next===2&&controllers.some(item=>{const load=state.geometry.doors.filter(entry=>(item.servedDoorIds||[]).includes(entry.id)).reduce((sum,entry)=>sum+(entry.id===door.id?next:entry.readerCount||1),0);return load>(item.controllerReaderCapacity||8);})){event.target.value=String(door.readerCount||1);return showToast('У связанного контроллера недостаточно каналов считывателей',true);}

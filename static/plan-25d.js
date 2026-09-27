@@ -4,7 +4,6 @@ class Plan25D {
     this.canvas = canvas; this.ctx = canvas.getContext('2d'); this.onCamera = onCamera;
     this.tilt = 45; this.rotation = 0; this.zoom = 1; this.pan = {x: 0, y: 0};
     this.faces = []; this.showSource = false; this.active = false;
-    canvas.addEventListener('wheel', e => { e.preventDefault(); this.zoomBy(e.deltaY < 0 ? 1.1 : 1 / 1.1); }, {passive: false});
     canvas.addEventListener('pointerdown', e => {
       canvas.setPointerCapture(e.pointerId);
       this.drag = {x: e.clientX, y: e.clientY, pan: this.panMode || this.spaceHeld || e.shiftKey || e.button === 2};
